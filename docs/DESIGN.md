@@ -29,3 +29,8 @@ Currently in initialization phase. The planned architecture involves:
 - **Framework**: The application is built using FastAPI.
 - **Entrypoint**: `app/main.py` serves as the ASGI entrypoint. It initializes the FastAPI application instance with metadata (title, description, version) and registers the fundamental routing.
 - **Health Endpoint**: A dedicated `/health` endpoint is exposed. This allows load balancers, container orchestrators (like Docker Compose or Kubernetes), and monitoring tools to verify deterministically that the application is alive and ready to accept traffic.
+
+## 4. Configuration and Logging
+
+- **Configuration Management**: Configuration is managed via the `pydantic-settings` library. The `app.core.config.Settings` class defines the schema for environment variables (`app_name`, `environment`, `debug`, `database_url`). A singleton settings object is provided via a cached dependency `get_settings()` to ensure environment variables are evaluated only once at startup.
+- **Structured Logging**: Logging is handled by `structlog`. It provides deterministic, JSON-formatted structured logs in production environments, and colorized, human-readable output in development. Standard library logs are intercepted and unified into the structlog pipeline.

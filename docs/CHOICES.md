@@ -40,3 +40,14 @@ This document explains *why* architectural decisions were made.
 * **Cons**: Smaller ecosystem for "batteries-included" features (e.g., built-in admin panel) compared to Django.
 * **Final choice**: FastAPI
 * **Reasoning**: The Store Intelligence System requires high throughput for event processing and clean, validated API contracts. FastAPI's first-class integration with Python type hints and Pydantic provides robust, maintainable code. Furthermore, its asynchronous capabilities ensure the API can handle high concurrency gracefully without the heavy boilerplate of Django or the manual typing enforcement needed in Flask.
+
+## 5. Configuration and Logging
+
+* **Decision**: `structlog` for logging, `pydantic-settings` for configuration.
+* **Alternatives considered**: Standard Python `logging`, `python-decouple`, standard `os.environ`.
+* **Pros**: 
+  - **Structlog**: Outputs logs as JSON, which is essential for modern log aggregators (e.g., ELK stack, Datadog) to parse events properly. Context variables allow attaching request IDs to all logs effortlessly.
+  - **Environment-based config (pydantic-settings)**: Adheres to the 12-Factor App methodology. Validates configuration at startup using Pydantic, failing fast if required variables (like `DATABASE_URL`) are missing or incorrectly typed.
+* **Cons**: Introduces external dependencies for features built into the Python standard library.
+* **Final choice**: `structlog` and `pydantic-settings`.
+* **Reasoning**: A production-grade system needs structured logging to track business intelligence events effectively and debug issues across services. `structlog` solves this elegantly. For configuration, environment variables are the standard for Dockerized deployments. `pydantic-settings` ensures type safety and rigorous validation, preventing runtime crashes due to misconfiguration.
