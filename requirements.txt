@@ -1,0 +1,20 @@
+# Web Framework
+fastapi
+uvicorn[standard]
+
+# Database
+sqlalchemy
+alembic
+
+# Validation
+pydantic
+pydantic-settings
+
+# Logging
+structlog
+
+# Linting & Formatting (Development)
+ruff
+
+# Testing (Development)
+pytest
