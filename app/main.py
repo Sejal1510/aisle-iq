@@ -5,6 +5,8 @@ import structlog
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.db.session import init_db
+# Import the events router
+from app.api import events as events_module
 
 settings = get_settings()
 
@@ -30,6 +32,13 @@ app = FastAPI(
     description="API for converting raw CCTV footage into business intelligence",
     version="1.0.0",
     lifespan=lifespan
+)
+
+# Register the events router
+app.include_router(
+    events_module.router,
+    prefix="/api/v1/events",
+    tags=["events"]
 )
 
 @app.get("/")
