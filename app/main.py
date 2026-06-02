@@ -4,6 +4,7 @@ import structlog
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging
+from app.db.session import init_db
 
 settings = get_settings()
 
@@ -17,6 +18,10 @@ async def lifespan(app: FastAPI):
         environment=settings.environment, 
         debug=settings.debug
     )
+    
+    # Initialize the database tables on startup
+    init_db()
+    
     yield
     logger.info("application_shutdown")
 

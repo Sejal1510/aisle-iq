@@ -34,3 +34,9 @@ Currently in initialization phase. The planned architecture involves:
 
 - **Configuration Management**: Configuration is managed via the `pydantic-settings` library. The `app.core.config.Settings` class defines the schema for environment variables (`app_name`, `environment`, `debug`, `database_url`). A singleton settings object is provided via a cached dependency `get_settings()` to ensure environment variables are evaluated only once at startup.
 - **Structured Logging**: Logging is handled by `structlog`. It provides deterministic, JSON-formatted structured logs in production environments, and colorized, human-readable output in development. Standard library logs are intercepted and unified into the structlog pipeline.
+
+## 5. Database Architecture
+
+- **ORM Framework**: The system utilizes SQLAlchemy 2.0. All database models inherit from a common `DeclarativeBase`.
+- **Session Management**: Database interactions are isolated per request using FastAPI's Dependency Injection system. The `get_db()` dependency yields a dedicated SQLAlchemy `Session` for the duration of the request and ensures it is safely closed afterward.
+- **Development Lifecycle**: In development environments, the application leverages SQLAlchemy's `Base.metadata.create_all()` during the FastAPI `lifespan` startup phase to automatically bootstrap the SQLite schema.

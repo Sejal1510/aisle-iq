@@ -51,3 +51,14 @@ This document explains *why* architectural decisions were made.
 * **Cons**: Introduces external dependencies for features built into the Python standard library.
 * **Final choice**: `structlog` and `pydantic-settings`.
 * **Reasoning**: A production-grade system needs structured logging to track business intelligence events effectively and debug issues across services. `structlog` solves this elegantly. For configuration, environment variables are the standard for Dockerized deployments. `pydantic-settings` ensures type safety and rigorous validation, preventing runtime crashes due to misconfiguration.
+
+## 6. Database Foundation
+
+* **Decision**: SQLite (initial) paired with SQLAlchemy 2.0 ORM.
+* **Alternatives considered**: PostgreSQL, Raw SQL (aiosqlite/psycopg), Tortoise ORM, SQLModel.
+* **Pros**: 
+  - **SQLite**: Requires zero operational overhead, making it ideal for the initial challenge submission and local testing.
+  - **SQLAlchemy 2.0**: The industry standard for Python database interactions. It provides a robust Data Mapper pattern, excellent typing support, and seamless transitioning across SQL dialects.
+* **Cons**: SQLite does not handle high concurrent writes well; SQLAlchemy has a steeper learning curve compared to lightweight ORMs.
+* **Final choice**: SQLite + SQLAlchemy 2.0.
+* **Reasoning**: We prioritize "production-readiness". While SQLite is our initial choice for simplicity, using SQLAlchemy guarantees that our business logic and data access layers are decoupled from the underlying database dialect. If the Store Intelligence System needs to scale to thousands of concurrent camera events, we only need to change the connection string and migration scripts to switch to PostgreSQL. Setting `expire_on_commit=False` allows us to cleanly separate DB transactions from Pydantic model serialization later in the request lifecycle without requiring explicit eager loading or detached instance handling.
