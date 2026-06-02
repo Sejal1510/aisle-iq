@@ -1,11 +1,15 @@
 from fastapi import FastAPI
 
 app = FastAPI(
-    title="Store Intelligence API",
-    description="API for CCTV business intelligence",
+    title="Store Intelligence System",
+    description="API for converting raw CCTV footage into business intelligence",
     version="1.0.0",
 )
 
 @app.get("/")
-def health_check():
-    return {"status": "ok", "message": "Store Intelligence System is running"}
+async def root():
+    return {"message": "Store Intelligence System API"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}

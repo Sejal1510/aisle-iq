@@ -28,3 +28,15 @@ This document explains *why* architectural decisions were made.
 * **Cons**: Not suitable for high concurrency production loads.
 * **Final choice**: `SQLite` (initially).
 * **Reasoning**: Follows the "production-readiness over flashy features" principle. We will implement the Repository Pattern to abstract the data layer, allowing a seamless transition to PostgreSQL when the system scales.
+
+## 4. Framework Selection
+
+* **Decision**: FastAPI
+* **Alternatives considered**: Flask, Django
+* **Pros**: 
+  - Native asynchronous support for high-performance I/O operations (crucial for an event-driven intelligence system).
+  - Strong typing with Pydantic ensures rigorous request/response validation at the API boundary.
+  - Automatic OpenAPI (Swagger) documentation generation, significantly improving developer experience and API discoverability.
+* **Cons**: Smaller ecosystem for "batteries-included" features (e.g., built-in admin panel) compared to Django.
+* **Final choice**: FastAPI
+* **Reasoning**: The Store Intelligence System requires high throughput for event processing and clean, validated API contracts. FastAPI's first-class integration with Python type hints and Pydantic provides robust, maintainable code. Furthermore, its asynchronous capabilities ensure the API can handle high concurrency gracefully without the heavy boilerplate of Django or the manual typing enforcement needed in Flask.

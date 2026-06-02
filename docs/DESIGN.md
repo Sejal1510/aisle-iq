@@ -23,3 +23,9 @@ Currently in initialization phase. The planned architecture involves:
 * `dashboard`: Analytics UI.
 
 *(More sections to be added as development progresses)*
+
+## 3. Application Bootstrap
+
+- **Framework**: The application is built using FastAPI.
+- **Entrypoint**: `app/main.py` serves as the ASGI entrypoint. It initializes the FastAPI application instance with metadata (title, description, version) and registers the fundamental routing.
+- **Health Endpoint**: A dedicated `/health` endpoint is exposed. This allows load balancers, container orchestrators (like Docker Compose or Kubernetes), and monitoring tools to verify deterministically that the application is alive and ready to accept traffic.
