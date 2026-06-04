@@ -1,5 +1,5 @@
 from typing import List, Optional
-from sqlalchemy import String, Integer, Boolean, ForeignKey
+from sqlalchemy import String, Integer, Boolean, ForeignKey, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 from sqlalchemy.sql import func
@@ -17,6 +17,8 @@ class TrackedEntity(Base):
     age: Mapped[Optional[int]] = mapped_column(Integer)
     age_bucket: Mapped[Optional[str]] = mapped_column(String)
     is_staff: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    staff_confidence_score: Mapped[Optional[float]] = mapped_column(Float, default=0.0)
+    staff_inference_reason: Mapped[Optional[str]] = mapped_column(String)
     group_id: Mapped[Optional[str]] = mapped_column(String)
     group_size: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(default=func.now())

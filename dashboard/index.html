@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Store Intelligence Dashboard</title>
+    <link rel="stylesheet" href="/dashboard/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Dashboard navigation">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">SI</span>
+          <div>
+            <p class="eyebrow">Retail Intelligence</p>
+            <h1>Store Command</h1>
+          </div>
+        </div>
+        <nav class="nav-tabs" aria-label="Dashboard views">
+          <button class="tab-button is-active" type="button" data-view="overview">Overview</button>
+          <button class="tab-button" type="button" data-view="funnel">Funnel</button>
+          <button class="tab-button" type="button" data-view="paths">Paths</button>
+          <button class="tab-button" type="button" data-view="insights">Insights</button>
+          <button class="tab-button" type="button" data-view="comparison">Store Comparison</button>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Live analytics</p>
+            <h2 id="page-title">Overview</h2>
+          </div>
+          <form class="store-form" id="store-form">
+            <label for="store-id">Store</label>
+            <div class="store-controls">
+              <select id="store-id" name="storeId">
+                <option value="ST1001" selected>ST1001</option>
+                <option value="ST1002">ST1002</option>
+              </select>
+              <button type="submit">Refresh</button>
+            </div>
+          </form>
+        </header>
+
+        <section class="status-banner" id="status-banner" hidden></section>
+
+        <section class="view is-active" id="overview-view" data-view-panel="overview">
+          <div class="kpi-grid" id="kpi-grid"></div>
+
+          <section class="panel heatmap-panel">
+            <div class="panel-header">
+              <div>
+                <h3>Store Heatmap</h3>
+                <p>Hotspot density from generated CCTV events.</p>
+              </div>
+              <span id="heatmap-summary">0 points</span>
+            </div>
+            <div class="heatmap-stage" id="heatmap-stage">
+              <div class="heatmap-empty">No heatmap data available.</div>
+            </div>
+            <div class="heatmap-legend" aria-label="Heatmap intensity legend">
+              <span>Low</span>
+              <i></i>
+              <span>High</span>
+            </div>
+          </section>
+
+          <div class="section-grid">
+            <section class="panel">
+              <div class="panel-header">
+                <h3>Zone Dwell</h3>
+                <span id="zone-count">0 zones</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Zone</th>
+                      <th>Visits</th>
+                      <th>Average Dwell</th>
+                      <th>Total Dwell</th>
+                    </tr>
+                  </thead>
+                  <tbody id="zone-dwell-body"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <h3>Revenue Attribution</h3>
+                <span id="attribution-count">0 transactions</span>
+              </div>
+              <div class="revenue-block">
+                <span id="revenue-large">INR 0</span>
+                <p>Attributed to matched visitor and POS correlations.</p>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="funnel-view" data-view-panel="funnel">
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Conversion Funnel</h3>
+              <span id="funnel-store-label">ST1001</span>
+            </div>
+            <div class="funnel-track" id="funnel-track"></div>
+          </section>
+        </section>
+
+        <section class="view" id="paths-view" data-view-panel="paths">
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Customer Paths</h3>
+              <span id="paths-count">0 journeys</span>
+            </div>
+            <div class="path-grid">
+              <div>
+                <h4>Most Common</h4>
+                <div class="path-list" id="common-paths"></div>
+              </div>
+              <div>
+                <h4>Purchase Journeys</h4>
+                <div class="path-list" id="purchase-paths"></div>
+              </div>
+              <div>
+                <h4>Drop-Off Paths</h4>
+                <div class="path-list" id="dropoff-paths"></div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="insights-view" data-view-panel="insights">
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Retail Insights</h3>
+              <span id="insights-count">0 insights</span>
+            </div>
+            <div class="insights-list" id="insights-list"></div>
+          </section>
+        </section>
+
+        <section class="view" id="comparison-view" data-view-panel="comparison">
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Store Comparison</h3>
+              <span>ST1001 / ST1002</span>
+            </div>
+            <div class="comparison-grid" id="comparison-grid"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/dashboard/app.js" defer></script>
+  </body>
+</html>

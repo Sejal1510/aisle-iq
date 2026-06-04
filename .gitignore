@@ -34,6 +34,8 @@ venv.bak/
 # Project Specific
 data/*
 !data/.gitkeep
+!data/demo_pos_st1001_st1002.csv
+!data/generated_cctv_events.jsonl
 logs/*
 !logs/.gitkeep
 
@@ -47,3 +49,9 @@ logs/*
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Model weights
+yolov8*.pt
+
+# Local database
+store_intelligence.db

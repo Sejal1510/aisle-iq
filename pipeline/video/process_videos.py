@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any, TextIO
+
+import structlog
+
+from pipeline.video.config import default_video_configs
+from pipeline.video.events import VideoEventGenerator
+from pipeline.video.tracking import UltralyticsByteTracker, read_video_metadata
+
+
+logger = structlog.get_logger(__name__)
+
+
+def write_jsonl_event(output_file: TextIO, event: dict[str, Any]) -> None:
+    output_file.write(json.dumps(event, separators=(",", ":")))
+    output_file.write("\n")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate ingestion-compatible JSONL events from CCTV videos.")
+    parser.add_argument("--output", default="data/generated_cctv_events.jsonl", help="Path to write generated JSONL.")
+    parser.add_argument("--model", default="yolov8n.pt", help="Ultralytics YOLOv8 model name/path.")
+    parser.add_argument("--sample-fps", type=float, default=None, help="Override configured frame sampling FPS.")
+    parser.add_argument("--max-frames", type=int, default=None, help="Optional cap for smoke tests.")
+    parser.add_argument("--metadata-only", action="store_true", help="Inspect configured videos without running inference.")
+    args = parser.parse_args()
+
+    configs = default_video_configs()
+    if args.sample_fps is not None:
+        configs = [
+            config.__class__(
+                **{
+                    **config.__dict__,
+                    "sample_fps": args.sample_fps,
+                }
+            )
+            for config in configs
+        ]
+
+    if args.metadata_only:
+        for config in configs:
+            metadata = read_video_metadata(config.video_path)
+            logger.info(
+                "video_metadata",
+                store_id=config.store_id,
+                camera_id=config.camera_id,
+                role=config.role.value,
+                video_path=str(config.video_path),
+                fps=metadata.fps,
+                frame_count=metadata.frame_count,
+                width=metadata.width,
+                height=metadata.height,
+                duration_seconds=round(metadata.duration_seconds, 2),
+            )
+        return
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tracker = UltralyticsByteTracker(model_name=args.model)
+    total_events = 0
+
+    with output_path.open("w", encoding="utf-8") as output_file:
+        for config in configs:
+            generator = VideoEventGenerator(config)
+            camera_events = 0
+            logger.info(
+                "processing_video",
+                store_id=config.store_id,
+                camera_id=config.camera_id,
+                role=config.role.value,
+                video_path=str(config.video_path),
+            )
+
+            for snapshot in tracker.track_video(config, max_frames=args.max_frames):
+                for event in generator.process_snapshot(snapshot):
+                    write_jsonl_event(output_file, event)
+                    camera_events += 1
+
+            for event in generator.finalize():
+                write_jsonl_event(output_file, event)
+                camera_events += 1
+
+            total_events += camera_events
+            logger.info("video_events_generated", camera_id=config.camera_id, events=camera_events)
+
+    logger.info("cctv_event_generation_complete", output=str(output_path), events=total_events)
+
+
+if __name__ == "__main__":
+    main()

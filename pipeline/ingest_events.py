@@ -35,7 +35,7 @@ from app.services.event_ingestion_service import EventIngestionService
 # ----------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------
-DEFAULT_EVENTS_PATH = pathlib.Path(__file__).parent.parent / "data" / "sample_events.jsonl"
+DEFAULT_EVENTS_PATH = pathlib.Path(__file__).parent.parent / "data" / "generated_cctv_events.jsonl"
 BATCH_SIZE = 500               # DB commit batch size
 PROGRESS_INTERVAL = 1_000      # Log progress every N records
 

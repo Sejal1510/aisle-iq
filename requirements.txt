@@ -18,3 +18,8 @@ ruff
 
 # Testing (Development)
 pytest
+
+# CCTV Video Processing
+ultralytics
+opencv-python
+numpy
