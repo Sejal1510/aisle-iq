@@ -247,6 +247,12 @@ h3 {
   font-size: 0.86rem;
 }
 
+.panel-header p {
+  color: var(--muted);
+  font-size: 0.86rem;
+  margin: 4px 0 0;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -558,6 +564,183 @@ th {
   font-weight: 800;
 }
 
+/* ---------- Live Analytics (P4.2) ---------- */
+
+.kpi-grid--analytics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.section-grid--even {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.range-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.range-controls select {
+  min-height: 42px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  padding: 0 12px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.range-custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.range-custom label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.range-custom input,
+.range-custom button {
+  min-height: 42px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  padding: 0 12px;
+}
+
+.range-custom input {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.range-custom button {
+  background: var(--green);
+  color: white;
+  cursor: pointer;
+  border-color: var(--green);
+}
+
+.range-error {
+  color: var(--coral);
+  font-size: 0.84rem;
+  margin: 10px 0 0;
+}
+
+.analytics-empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 160px;
+}
+
+.bar-chart-bar {
+  flex: 1;
+  min-width: 4px;
+  background: var(--blue);
+  border-radius: 3px 3px 0 0;
+  height: var(--bar-height, 0%);
+}
+
+.bar-chart-group {
+  flex: 1;
+  min-width: 8px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.bar-chart-group .bar-chart-bar {
+  border-radius: 2px 2px 0 0;
+}
+
+.bar-chart-bar--joined {
+  background: var(--blue);
+}
+
+.bar-chart-bar--completed {
+  background: var(--green);
+}
+
+.bar-chart-bar--abandoned {
+  background: var(--coral);
+}
+
+.bar-chart-empty {
+  height: 160px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  text-align: center;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.chart-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.chart-legend .legend-joined::before {
+  background: var(--blue);
+}
+
+.chart-legend .legend-completed::before {
+  background: var(--green);
+}
+
+.chart-legend .legend-abandoned::before {
+  background: var(--coral);
+}
+
+.peak-hour-card {
+  gap: 8px;
+}
+
+.delta {
+  font-size: 0.78rem;
+  margin-left: 6px;
+  font-weight: 700;
+}
+
+.delta-up {
+  color: var(--green);
+}
+
+.delta-down {
+  color: var(--coral);
+}
+
+.delta-flat {
+  color: var(--muted);
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -569,7 +752,9 @@ th {
 
   .nav-tabs,
   .kpi-grid,
+  .kpi-grid--analytics,
   .section-grid,
+  .section-grid--even,
   .funnel-track,
   .path-grid,
   .insights-list,
@@ -584,5 +769,11 @@ th {
 
   .store-form {
     min-width: 0;
+  }
+
+  .range-controls,
+  .range-custom {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

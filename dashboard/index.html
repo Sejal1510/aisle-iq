@@ -22,6 +22,7 @@
           <button class="tab-button" type="button" data-view="paths">Paths</button>
           <button class="tab-button" type="button" data-view="insights">Insights</button>
           <button class="tab-button" type="button" data-view="comparison">Store Comparison</button>
+          <button class="tab-button" type="button" data-view="live-analytics">Live Analytics</button>
         </nav>
       </aside>
 
@@ -151,6 +152,89 @@
             </div>
             <div class="comparison-grid" id="comparison-grid"></div>
           </section>
+        </section>
+
+        <section class="view" id="live-analytics-view" data-view-panel="live-analytics">
+          <section class="panel range-panel">
+            <div class="panel-header">
+              <div>
+                <h3>Analytics Range</h3>
+                <p id="analytics-as-of">As of &mdash;</p>
+              </div>
+            </div>
+            <div class="range-controls">
+              <label for="range-preset">Range</label>
+              <select id="range-preset" name="rangePreset">
+                <option value="24h" selected>Last 24 hours</option>
+                <option value="3d">Last 3 days</option>
+                <option value="7d">Last 7 days</option>
+                <option value="custom">Custom range</option>
+              </select>
+              <div class="range-custom" id="range-custom" hidden>
+                <label for="range-start">Start</label>
+                <input type="datetime-local" id="range-start">
+                <label for="range-end">End</label>
+                <input type="datetime-local" id="range-end">
+                <button type="button" id="range-apply">Apply</button>
+              </div>
+            </div>
+            <p class="range-error" id="range-error" hidden></p>
+          </section>
+
+          <div class="analytics-empty" id="analytics-empty" hidden>
+            <p>No activity recorded for this store yet.</p>
+          </div>
+
+          <div id="analytics-content">
+            <div class="kpi-grid kpi-grid--analytics" id="analytics-kpi-grid"></div>
+
+            <div class="section-grid section-grid--even">
+              <section class="panel">
+                <div class="panel-header">
+                  <h3>Occupancy Over Time</h3>
+                  <span id="occupancy-history-summary">&mdash;</span>
+                </div>
+                <div class="bar-chart" id="occupancy-history-chart"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-header">
+                  <h3>Hourly Footfall</h3>
+                  <span id="footfall-summary">&mdash;</span>
+                </div>
+                <div class="bar-chart" id="footfall-chart"></div>
+              </section>
+            </div>
+
+            <div class="section-grid section-grid--even">
+              <section class="panel">
+                <div class="panel-header">
+                  <h3>Queue Activity Over Time</h3>
+                  <span id="queue-activity-summary">&mdash;</span>
+                </div>
+                <div class="bar-chart" id="queue-activity-chart"></div>
+                <div class="chart-legend">
+                  <span class="legend-joined">Joined</span>
+                  <span class="legend-completed">Completed</span>
+                  <span class="legend-abandoned">Abandoned</span>
+                </div>
+              </section>
+              <section class="panel">
+                <div class="panel-header">
+                  <h3>Peak Hours</h3>
+                  <span id="peak-hours-summary">&mdash;</span>
+                </div>
+                <div class="path-list" id="peak-hours-list"></div>
+              </section>
+            </div>
+
+            <section class="panel">
+              <div class="panel-header">
+                <h3>Period Comparison</h3>
+                <span id="comparison-period-label">&mdash;</span>
+              </div>
+              <div class="comparison-grid" id="period-comparison-grid"></div>
+            </section>
+          </div>
         </section>
       </main>
     </div>

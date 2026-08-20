@@ -6,6 +6,19 @@ const state = {
   heatmap: null,
   insights: null,
   paths: null,
+  // Live Analytics (P4.2) is loaded lazily -- see ensureLiveAnalyticsLoaded --
+  // so opening the dashboard and never visiting that tab fires none of its
+  // 8 requests. analyticsRange is only meaningful once loaded.
+  liveAnalyticsLoaded: false,
+  analyticsRange: null,
+};
+
+const RANGE_PRESET_HOURS = { "24h": 24, "3d": 72, "7d": 168 };
+const RANGE_PRESET_LABELS = {
+  "24h": "Last 24 hours",
+  "3d": "Last 3 days",
+  "7d": "Last 7 days",
+  custom: "Custom range",
 };
 
 const elements = {
@@ -31,6 +44,26 @@ const elements = {
   heatmapSummary: document.querySelector("#heatmap-summary"),
   tabButtons: document.querySelectorAll(".tab-button"),
   viewPanels: document.querySelectorAll("[data-view-panel]"),
+  analyticsAsOf: document.querySelector("#analytics-as-of"),
+  rangePreset: document.querySelector("#range-preset"),
+  rangeCustom: document.querySelector("#range-custom"),
+  rangeStart: document.querySelector("#range-start"),
+  rangeEnd: document.querySelector("#range-end"),
+  rangeApply: document.querySelector("#range-apply"),
+  rangeError: document.querySelector("#range-error"),
+  analyticsEmpty: document.querySelector("#analytics-empty"),
+  analyticsContent: document.querySelector("#analytics-content"),
+  analyticsKpiGrid: document.querySelector("#analytics-kpi-grid"),
+  occupancyHistorySummary: document.querySelector("#occupancy-history-summary"),
+  occupancyHistoryChart: document.querySelector("#occupancy-history-chart"),
+  footfallSummary: document.querySelector("#footfall-summary"),
+  footfallChart: document.querySelector("#footfall-chart"),
+  queueActivitySummary: document.querySelector("#queue-activity-summary"),
+  queueActivityChart: document.querySelector("#queue-activity-chart"),
+  peakHoursSummary: document.querySelector("#peak-hours-summary"),
+  peakHoursList: document.querySelector("#peak-hours-list"),
+  comparisonPeriodLabel: document.querySelector("#comparison-period-label"),
+  periodComparisonGrid: document.querySelector("#period-comparison-grid"),
 };
 
 const metricCards = [
@@ -52,9 +85,39 @@ elements.tabButtons.forEach((button) => {
 
 elements.storeForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  const previousStoreId = state.storeId;
   state.storeId = elements.storeInput.value.trim().toUpperCase() || "ST1001";
   state.comparisonStores = Array.from(new Set([state.storeId, "ST1002"]));
+  if (state.storeId !== previousStoreId) {
+    // A different store's available data may not suit a previously chosen
+    // custom range -- fall back to the default preset rather than carrying
+    // a stale selection across stores. A plain Refresh (same store) leaves
+    // the user's chosen range alone.
+    resetAnalyticsRangeControl();
+  }
   loadDashboard();
+  refreshLiveAnalyticsIfLoaded();
+});
+
+elements.rangePreset.addEventListener("change", () => {
+  const isCustom = elements.rangePreset.value === "custom";
+  elements.rangeCustom.hidden = !isCustom;
+  elements.rangeError.hidden = true;
+  if (!isCustom) {
+    loadLiveAnalytics();
+  }
+});
+
+elements.rangeApply.addEventListener("click", () => {
+  const start = new Date(elements.rangeStart.value);
+  const end = new Date(elements.rangeEnd.value);
+  if (!isValidRange(start, end)) {
+    elements.rangeError.hidden = false;
+    elements.rangeError.textContent = "Enter a start and end, with end after start.";
+    return;
+  }
+  elements.rangeError.hidden = true;
+  loadLiveAnalytics();
 });
 
 loadDashboard();
@@ -95,14 +158,17 @@ async function fetchJson(path) {
 }
 
 function activateView(viewName) {
-  const title = viewName === "comparison" ? "Store Comparison" : titleCase(viewName);
-  elements.pageTitle.textContent = title;
+  const titles = { comparison: "Store Comparison", "live-analytics": "Live Analytics" };
+  elements.pageTitle.textContent = titles[viewName] || titleCase(viewName);
   elements.tabButtons.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === viewName);
   });
   elements.viewPanels.forEach((panel) => {
     panel.classList.toggle("is-active", panel.dataset.viewPanel === viewName);
   });
+  if (viewName === "live-analytics") {
+    ensureLiveAnalyticsLoaded();
+  }
 }
 
 function renderOverview(metrics) {
@@ -290,6 +356,293 @@ async function renderComparison() {
       `;
     })
     .join("");
+}
+
+// ---------------------------------------------------------------------------
+// Live Analytics (P4.2) -- request/response only, no polling or streaming.
+// Loaded lazily (see activateView) the first time the tab is opened, then
+// refreshed on store change, range change, and the existing Refresh button.
+// ---------------------------------------------------------------------------
+
+function ensureLiveAnalyticsLoaded() {
+  if (state.liveAnalyticsLoaded) {
+    return;
+  }
+  state.liveAnalyticsLoaded = true;
+  loadLiveAnalytics();
+}
+
+function refreshLiveAnalyticsIfLoaded() {
+  if (state.liveAnalyticsLoaded) {
+    loadLiveAnalytics();
+  }
+}
+
+function resetAnalyticsRangeControl() {
+  elements.rangePreset.value = "24h";
+  elements.rangeCustom.hidden = true;
+  elements.rangeError.hidden = true;
+}
+
+async function loadLiveAnalytics() {
+  setStatus("");
+  try {
+    const health = await fetchJson("/health");
+    const storeHealth = (health.stores || {})[state.storeId];
+
+    if (!storeHealth || !storeHealth.last_event_timestamp) {
+      // Honest empty state: this store has no recorded activity at all, so
+      // none of the 8 analytics endpoints have anything to answer -- show
+      // one clear message instead of firing (and failing to render) eight
+      // requests against a store with nothing ingested yet.
+      setLiveAnalyticsAvailability(false);
+      elements.analyticsAsOf.textContent = "As of — no recorded activity yet";
+      return;
+    }
+
+    const asOf = new Date(storeHealth.last_event_timestamp);
+    elements.analyticsAsOf.textContent = `As of ${formatDateTime(asOf)}`;
+
+    const range = resolveAnalyticsRange(asOf);
+    state.analyticsRange = range;
+    setLiveAnalyticsAvailability(true);
+
+    const query = rangeParams(range);
+    const [occCurrent, queueCurrent, queueMetrics, occHistory, footfall, queueHourly, peak, comparison] =
+      await Promise.all([
+        fetchJson(`/stores/${state.storeId}/occupancy/current`),
+        fetchJson(`/stores/${state.storeId}/queue/current`),
+        fetchJson(`/stores/${state.storeId}/queue/metrics?${query}`),
+        fetchJson(`/stores/${state.storeId}/occupancy/history?${query}`),
+        fetchJson(`/stores/${state.storeId}/footfall/hourly?${query}`),
+        fetchJson(`/stores/${state.storeId}/queue/hourly?${query}`),
+        fetchJson(`/stores/${state.storeId}/peak-hours?${query}`),
+        fetchJson(`/stores/${state.storeId}/comparison?${query}`),
+      ]);
+
+    renderAnalyticsKpis(occCurrent, queueCurrent, queueMetrics);
+    renderOccupancyHistory(occHistory);
+    renderHourlyFootfall(footfall);
+    renderQueueActivityChart(queueHourly);
+    renderPeakHours(peak);
+    renderPeriodComparison(comparison);
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+function resolveAnalyticsRange(asOf) {
+  const preset = elements.rangePreset.value;
+  if (preset === "custom") {
+    const start = new Date(elements.rangeStart.value);
+    const end = new Date(elements.rangeEnd.value);
+    if (isValidRange(start, end)) {
+      return { start, end, preset: "custom" };
+    }
+    // Defensive fallback only -- the Apply button already validates before
+    // ever calling loadLiveAnalytics with preset "custom".
+  }
+  const hours = RANGE_PRESET_HOURS[preset] || RANGE_PRESET_HOURS["24h"];
+  return { start: new Date(asOf.getTime() - hours * 60 * 60 * 1000), end: asOf, preset: preset in RANGE_PRESET_HOURS ? preset : "24h" };
+}
+
+function isValidRange(start, end) {
+  return start instanceof Date && !isNaN(start) && end instanceof Date && !isNaN(end) && end > start;
+}
+
+function rangeParams(range) {
+  return `start=${encodeURIComponent(range.start.toISOString())}&end=${encodeURIComponent(range.end.toISOString())}`;
+}
+
+function setLiveAnalyticsAvailability(available) {
+  elements.analyticsContent.hidden = !available;
+  elements.analyticsEmpty.hidden = available;
+}
+
+function renderAnalyticsKpis(occCurrent, queueCurrent, queueMetrics) {
+  const rangeLabel = RANGE_PRESET_LABELS[state.analyticsRange.preset] || "selected range";
+  const hasQueueVolume = queueMetrics.completed_visits + queueMetrics.abandoned_visits > 0;
+
+  elements.analyticsKpiGrid.innerHTML = `
+    <article class="kpi-card">
+      <span>Current Occupancy</span>
+      <strong>${formatNumber(occCurrent.occupancy)}</strong>
+      <small>As of ${formatDateTime(new Date(occCurrent.as_of))}</small>
+    </article>
+    <article class="kpi-card">
+      <span>Current Queue Length</span>
+      <strong>${formatNumber(queueCurrent.queue_length)}</strong>
+      <small>As of ${formatDateTime(new Date(queueCurrent.as_of))}</small>
+    </article>
+    <article class="kpi-card">
+      <span>Avg Wait Time</span>
+      <strong>${queueMetrics.average_wait_seconds === null ? "—" : formatDuration(queueMetrics.average_wait_seconds)}</strong>
+      <small>${queueMetrics.average_wait_seconds === null ? "No completed visits in range" : rangeLabel}</small>
+    </article>
+    <article class="kpi-card">
+      <span>Queue Abandonment Rate</span>
+      <strong>${hasQueueVolume ? formatPercent(queueMetrics.abandonment_rate) : "—"}</strong>
+      <small>${hasQueueVolume ? rangeLabel : "No queue visits in range"}</small>
+    </article>
+  `;
+}
+
+function renderBarChart(container, values, labels, emptyMessage) {
+  const hasActivity = values.some((value) => value > 0);
+  if (!values.length || !hasActivity) {
+    container.innerHTML = `<div class="bar-chart-empty">${escapeHtml(emptyMessage)}</div>`;
+    return;
+  }
+  const max = Math.max(...values, 1);
+  container.innerHTML = values
+    .map((value, index) => {
+      const heightPct = Math.round((value / max) * 100);
+      return `<span class="bar-chart-bar" style="--bar-height: ${heightPct}%" title="${escapeHtml(labels[index])}: ${formatNumber(value)}"></span>`;
+    })
+    .join("");
+}
+
+function renderOccupancyHistory(response) {
+  const points = response.points || [];
+  const values = points.map((point) => point.occupancy);
+  const labels = points.map((point) => formatBucketLabel(point.bucket_start));
+  const max = values.length ? Math.max(...values) : 0;
+
+  elements.occupancyHistorySummary.textContent = max > 0 ? `Peak ${formatNumber(max)}` : "No occupancy in range";
+  renderBarChart(elements.occupancyHistoryChart, values, labels, "No occupancy recorded in this range.");
+}
+
+function renderHourlyFootfall(response) {
+  const buckets = response.buckets || [];
+  const values = buckets.map((bucket) => bucket.entries);
+  const labels = buckets.map((bucket) => formatBucketLabel(bucket.bucket_start));
+  const total = values.reduce((sum, value) => sum + value, 0);
+
+  elements.footfallSummary.textContent = total > 0 ? `${formatNumber(total)} entries` : "No entries in range";
+  renderBarChart(elements.footfallChart, values, labels, "No entries recorded in this range.");
+}
+
+function renderQueueActivityChart(response) {
+  const buckets = response.buckets || [];
+  const totalJoined = buckets.reduce((sum, bucket) => sum + bucket.joined, 0);
+  const totalCompleted = buckets.reduce((sum, bucket) => sum + bucket.completed, 0);
+  const totalAbandoned = buckets.reduce((sum, bucket) => sum + bucket.abandoned, 0);
+
+  elements.queueActivitySummary.textContent =
+    totalJoined + totalCompleted + totalAbandoned > 0
+      ? `${formatNumber(totalCompleted)} completed · ${formatNumber(totalAbandoned)} abandoned`
+      : "No queue activity in range";
+
+  if (!buckets.length || totalJoined + totalCompleted + totalAbandoned === 0) {
+    elements.queueActivityChart.innerHTML = `<div class="bar-chart-empty">No queue activity recorded in this range.</div>`;
+    return;
+  }
+
+  const max = Math.max(...buckets.flatMap((bucket) => [bucket.joined, bucket.completed, bucket.abandoned]), 1);
+  elements.queueActivityChart.innerHTML = buckets
+    .map((bucket) => {
+      const label = formatBucketLabel(bucket.bucket_start);
+      return `
+        <span class="bar-chart-group" title="${escapeHtml(label)}">
+          <i class="bar-chart-bar bar-chart-bar--joined" style="--bar-height: ${Math.round((bucket.joined / max) * 100)}%"></i>
+          <i class="bar-chart-bar bar-chart-bar--completed" style="--bar-height: ${Math.round((bucket.completed / max) * 100)}%"></i>
+          <i class="bar-chart-bar bar-chart-bar--abandoned" style="--bar-height: ${Math.round((bucket.abandoned / max) * 100)}%"></i>
+        </span>
+      `;
+    })
+    .join("");
+}
+
+function renderPeakHours(response) {
+  const ranked = response.ranked_hours || [];
+
+  elements.peakHoursSummary.textContent = response.peak_hour
+    ? `Peak ${formatBucketLabel(response.peak_hour.bucket_start)}`
+    : "No peak in range";
+
+  if (!response.peak_hour) {
+    elements.peakHoursList.innerHTML = `<div class="empty-row">No traffic recorded in this range.</div>`;
+    return;
+  }
+
+  const max = ranked[0] ? ranked[0].entries : 1;
+  elements.peakHoursList.innerHTML = ranked
+    .slice(0, 8)
+    .map((bucket) => {
+      const width = max ? Math.round((bucket.entries / max) * 100) : 0;
+      return `
+        <article class="path-card peak-hour-card">
+          <strong>#${bucket.rank} · ${escapeHtml(formatBucketLabel(bucket.bucket_start))}</strong>
+          <div class="progress-bar"><i style="--bar-width: ${width}%"></i></div>
+          <small>${formatNumber(bucket.entries)} entries</small>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderPeriodComparison(response) {
+  const deltas = response.deltas || {};
+  elements.comparisonPeriodLabel.textContent =
+    `${formatDateTime(new Date(response.current.start))} vs ${formatDateTime(new Date(response.previous.start))}`;
+
+  const rows = [
+    ["Footfall", "footfall", formatNumber],
+    ["Unique Visitors", "unique_visitors", formatNumber],
+    ["Queue Joined", "queue_joined", formatNumber],
+    ["Queue Completed", "queue_completed", formatNumber],
+    ["Queue Abandoned", "queue_abandoned", formatNumber],
+    ["Avg Occupancy", "average_occupancy", formatDecimal],
+  ];
+
+  const buildCard = (label, data, showDelta) => `
+    <article class="comparison-card">
+      <header>
+        <h3>${label}</h3>
+        <span>${formatDateTime(new Date(data.start))} – ${formatDateTime(new Date(data.end))}</span>
+      </header>
+      <dl>
+        ${rows
+          .map(
+            ([rowLabel, key, formatter]) => `
+          <div>
+            <dt>${rowLabel}</dt>
+            <dd>${formatter(data[key])}${showDelta ? formatDeltaBadge(deltas[key]) : ""}</dd>
+          </div>
+        `
+          )
+          .join("")}
+      </dl>
+    </article>
+  `;
+
+  elements.periodComparisonGrid.innerHTML =
+    buildCard("Current Period", response.current, true) + buildCard("Previous Period", response.previous, false);
+}
+
+function formatDeltaBadge(delta) {
+  if (!delta) {
+    return "";
+  }
+  const direction = delta.absolute > 0 ? "up" : delta.absolute < 0 ? "down" : "flat";
+  const arrow = direction === "up" ? "▲" : direction === "down" ? "▼" : "—";
+  const percentText = delta.percent === null ? "" : ` ${delta.percent > 0 ? "+" : ""}${Math.round(delta.percent * 100)}%`;
+  return ` <span class="delta delta-${direction}">${arrow}${percentText}</span>`;
+}
+
+function formatBucketLabel(isoString) {
+  const date = new Date(isoString);
+  if (isNaN(date)) {
+    return "—";
+  }
+  return date.toLocaleString("en-IN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDateTime(date) {
+  if (!(date instanceof Date) || isNaN(date)) {
+    return "—";
+  }
+  return date.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
 }
 
 function renderEmptyState() {
