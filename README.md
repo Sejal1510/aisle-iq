@@ -6,6 +6,44 @@ An end-to-end system that converts raw CCTV footage into business intelligence, 
 
 The submission focuses on practical retail outcomes: reliable event generation, staff/customer filtering, POS correlation, customer journey analytics, heatmaps, and deterministic recommendations that a store operations team can act on.
 
+## P0-P2 Audit Update (2026-08-19)
+
+This submission was independently audited after the challenge, and the audit's findings are being worked through in phases. Everything else in this document describes the original submission and still applies unless noted here.
+
+- **P0 -- repository/data cleanup.** The original `data/sample_eventsbe42122 (1).jsonl` and `data/POS - sample transactionsb1e826f (1).csv` fixtures were excluded from the public repository, so a fresh clone could not run the full test suite. Small, synthetic, deterministic replacements now live under `tests/fixtures/` and are committed -- `pip install -r requirements.txt && python -m pytest` now works from a clean clone with no missing-file errors and no data from the original development machine.
+- **P1 -- critical correctness.**
+  - **Queue event lifecycle (F-01).** The video pipeline now emits a real `BILLING_QUEUE_JOIN` event the moment a tracked person enters the queue polygon, and a correctly labeled `BILLING_QUEUE_COMPLETE` (previously mislabeled `BILLING_QUEUE_JOIN`) or `BILLING_QUEUE_ABANDON` event when they leave. `wait_seconds` is always `exit_timestamp - join_timestamp`; no service-start time is fabricated.
+  - **Store-scoped identity, first pass (F-02).** A tracked visitor's identity was namespaced by store before lookup/creation, so the same short source track ID from two different stores could no longer be merged into one visitor. P2 (below) replaced the underlying storage model entirely while keeping this resolution behavior.
+  - **Database bootstrap (F-03).** Schema creation no longer silently skips outside `ENVIRONMENT=development` -- table creation runs in every environment. P2 (below) completes this with real Alembic-managed migrations.
+  - **Batched staff/group inference (F-04).** Batch ingestion (`POST /events/ingest` and the offline JSONL importer) now runs staff/group inference once per store per commit batch instead of once per event.
+  - **Ingestion authentication, first pass (F-05).** `POST /events/` and `POST /events/ingest` require a valid `X-API-Key` header. P2 (below) extends this from authentication (is the key valid?) to per-store authorization (is this key allowed to submit for this store?).
+  - **Standardized ingestion error responses (F-06).** `POST /events/` now returns 400 for a domain-level rejection and 500 for an unexpected error, each shaped as `{"error", "message", "trace_id", "details"}`, instead of a bare 500 for everything. 422 for a malformed request body was already handled automatically by FastAPI's own request validation.
+  - **HTTP-layer test coverage (F-07).** `tests/test_api_integration.py` exercises ingestion, authentication, and analytics routes through the real ASGI application (FastAPI `TestClient`), in addition to the existing direct-call service tests.
+- **P2 -- data contracts + production database foundation.** Builds directly on P1's identity, database-bootstrap, and authentication fixes above.
+  - **Canonical UUID identity + `IdentityAlias`.** `TrackedEntity.id` is now a platform-generated UUID, never a raw source identifier. A new `identity_alias` table maps each `(store, camera scope, source field, source value)` to exactly one canonical entity -- this is what makes the id namespace-independent instead of assuming `id_token == track_id == visitor_id` uniqueness. No cross-alias merging/ReID is performed; see Limitations below.
+  - **Organization / Store / Camera / Zone reference model.** A new `organization` table sits above `Store` (single-tenant today, but a real FK instead of an implicit assumption). `ReferenceDataService` auto-provisions `Store`/`Camera`/`Zone` rows the first time ingestion references an id, since those are now real, enforced foreign keys rather than unenforced string columns.
+  - **`RawEvent` archive.** Every ingestion attempt -- accepted or duplicate -- now persists the exact submitted payload in a `raw_event` table (with validation status and a link to the canonical `Event` it produced), independent of whatever the current normalization logic extracted from it. A replay workflow on top of this archive is not yet built.
+  - **Store-scoped idempotency.** `Event` and `PosTransaction` idempotency keys moved from globally-unique columns to database-level `UniqueConstraint("store_id", ...)`, so two different stores reusing the same source-provided id can never collide. CCTV event families that never carry an explicit `event_id` (entry/exit/reentry/zone/queue events) now get a deterministic synthetic key derived from their identifying fields, so a replay is recognized as a duplicate instead of silently creating a new event.
+  - **Store-scoped API-key authorization.** Extends F-05: a valid key now only authorizes requests for the store it was issued to. A single-event submission for a different store returns 403; in a batch, only the mismatched items are rejected, the rest of the batch still processes.
+  - **Alembic migrations.** A single initial-schema migration (`alembic/versions/853b1b696474_initial_schema.py`) creates all 13 tables with the same FKs/constraints as the ORM models. `init_db()` still does zero-friction `create_all` in `development`, but every other environment now verifies the database is at the Alembic head revision and fails loudly and specifically if not.
+  - **SQLite for development, PostgreSQL direction for production.** `psycopg[binary]` was added to `requirements.txt` and the migration is written in dialect-neutral SQLAlchemy, but it has only been exercised against SQLite so far -- see Limitations below.
+
+### Creating a local API key
+
+Ingestion routes require an API key once the app is running. Create one for a store before calling `POST /events/` or `POST /events/ingest` (the offline `pipeline.ingest_events`/`pipeline.ingest_pos` scripts are unaffected -- they call the ingestion service directly and do not go through the API):
+
+```powershell
+python -c "from app.db.session import init_db, SessionLocal; from app.core.security import create_api_key; from app.models.store import Store; init_db(); db=SessionLocal(); db.merge(Store(id='ST1001')); _row, raw_key = create_api_key(db, 'ST1001'); db.commit(); print(raw_key)"
+```
+
+Save the printed key -- it is hashed at rest and cannot be recovered again. Pass it as the `X-API-Key` header on ingestion requests, including from the `/docs` Swagger UI. This key only authorizes requests for the store it was created for (`ST1001` above) -- submitting an event for a different `store_id`/`store_code` returns 403.
+
+### Current known limitations (as of the P2 update)
+
+- **PostgreSQL is not yet verified.** The Alembic migration and `psycopg[binary]` driver are in place, but nothing has been run against a live PostgreSQL instance yet -- only SQLite, via `tests/test_db_session.py`.
+- **Dashboard/analytics read routes are not authenticated.** Only the ingestion routes (`POST /events/`, `POST /events/ingest`) require an API key. Gating dashboard/analytics routes needs a User/StoreAccess/RBAC model, which does not exist yet.
+- **No cross-camera identity merging/ReID.** `IdentityAlias` resolution is deterministic and camera-scoped for `track_id`-based identifiers -- the same physical visitor seen on two different cameras resolves to two different `TrackedEntity` rows, by design for this phase.
+
 ## Quickstart
 
 ```powershell
@@ -186,12 +224,14 @@ Implemented for this submission:
 - Explainable staff detection and group detection heuristics with dashboard metrics.
 - Deterministic retail insights for queue, zone, conversion, visitor, and revenue recommendations.
 - Customer path analytics for common journeys, purchase journeys, and drop-off paths.
+- Canonical UUID identity with `IdentityAlias`, an `Organization`/`Store`/`Camera`/`Zone` reference model, a `RawEvent` archive, store-scoped idempotency, store-scoped API-key authorization, and Alembic migrations (see the P0-P2 Audit Update above).
 
 Roadmap / design-not-fully-implemented items are explicitly treated as future work in the docs:
 
-- Full raw-event archive table and replay workflow.
-- Production-grade identity alias mapping and cross-camera ReID.
-- Advanced anomaly detection, streaming dashboard updates, and production database migration setup.
+- Raw-event *replay* workflow (the archive table itself is implemented; replaying it is not).
+- Cross-camera identity merging/ReID (the alias mapping itself is implemented; merging aliases across cameras is not).
+- PostgreSQL verified in a live environment (the migration exists and is dialect-neutral but has only run against SQLite so far).
+- Advanced anomaly detection and streaming dashboard updates.
 
 ## Screenshots
 
@@ -259,12 +299,13 @@ Repository strengths:
 - Confidence-scored POS correlation with no-match handling.
 - Staff exclusion, group detection, re-entry behavior, path analytics, and deterministic recommendations.
 - Transparent demo data handling and reproducible local setup.
-- 53 passing tests covering ingestion, POS, correlation, analytics, dashboard static integration, video event generation, staff/group inference, insights, and path analytics.
+- 101 passing tests (verified from a clean clone after the P0-P2 audit update above) covering ingestion, POS, correlation, analytics, dashboard static integration, HTTP-layer API integration, video event generation, staff/group inference, insights, path analytics, the identity/reference-data/raw-event/idempotency data model, and database bootstrap/migration behavior.
 
 Remaining limitations:
 
 - Cross-camera ReID is not implemented; it is documented as roadmap because safe stitching needs calibrated topology and confidence modeling.
-- Raw-event replay and production migrations are roadmap items.
+- Raw-event replay (the archive itself is implemented) and live PostgreSQL verification (the migration exists but has only run against SQLite) are roadmap items.
+- Dashboard/analytics read routes are not authenticated; only the ingestion routes are, pending a future User/StoreAccess/RBAC model.
 - The dashboard is static and polling-based, suitable for challenge evaluation but not a full production command center.
 
 Known tradeoffs:
@@ -275,11 +316,11 @@ Known tradeoffs:
 
 Production roadmap:
 
-- Add Alembic migrations and PostgreSQL deployment.
-- Add explicit raw-event archive/replay tables.
-- Add calibrated camera topology and optional confidence-scored identity stitching.
+- Verify the Alembic migration against a live PostgreSQL instance and deploy against it (migrations themselves are implemented as of the P2 update above).
+- Add a raw-event replay workflow on top of the existing `RawEvent` archive.
+- Add calibrated camera topology and optional confidence-scored cross-camera identity stitching (ReID) on top of the existing `IdentityAlias` model.
 - Add richer anomaly detection and peak-hour staffing recommendations.
-- Add authenticated dashboard access, refresh controls, and deployment monitoring.
+- Add authenticated dashboard access (ingestion authentication and store-scoped authorization are implemented as of the P0-P2 update above; dashboard/analytics routes remain open pending a future User/StoreAccess/RBAC model), refresh controls, and deployment monitoring.
 
 Estimated submission readiness: 96/100.
 
