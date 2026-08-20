@@ -80,6 +80,75 @@ def test_anomalies_endpoint_returns_operational_contract(api_session: Session) -
     assert all(anomaly.suggested_action for anomaly in response.anomalies)
 
 
+# ---------------------------------------------------------------------------
+# P4.3: anomalies endpoint gains optional, additive start/end trend params.
+# ---------------------------------------------------------------------------
+
+
+def test_anomalies_endpoint_without_range_has_no_trend_fields(api_session: Session) -> None:
+    """The exact same call as test_anomalies_endpoint_returns_operational_contract
+    above (no start/end) -- explicit proof that the P4.3 schema additions
+    never populate when the caller doesn't opt into range-aware behavior."""
+    response = get_store_anomalies("ST1008", db=api_session)
+
+    for anomaly in response.anomalies:
+        assert anomaly.metric is None
+        assert anomaly.related_signals == []
+
+
+def test_anomalies_endpoint_rejects_start_without_end(api_session: Session) -> None:
+    from datetime import datetime
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_store_anomalies("ST1008", start=datetime(2026, 4, 10), db=api_session)
+
+    assert exc_info.value.status_code == 400
+
+
+def test_anomalies_endpoint_rejects_end_without_start(api_session: Session) -> None:
+    from datetime import datetime
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_store_anomalies("ST1008", end=datetime(2026, 4, 10), db=api_session)
+
+    assert exc_info.value.status_code == 400
+
+
+def test_anomalies_endpoint_rejects_end_before_start(api_session: Session) -> None:
+    from datetime import datetime
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_store_anomalies(
+            "ST1008", start=datetime(2026, 4, 10), end=datetime(2026, 4, 9), db=api_session
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+def test_anomalies_endpoint_with_valid_range_returns_200_and_may_include_trend_anomalies(
+    api_session: Session,
+) -> None:
+    from datetime import datetime
+
+    response = get_store_anomalies(
+        "ST1008",
+        start=datetime(2026, 4, 10, 0, 0, 0),
+        end=datetime(2026, 4, 11, 0, 0, 0),
+        db=api_session,
+    )
+
+    assert response.store_id == "ST1008"
+    # Static rules still run alongside the (possibly empty) trend rules.
+    assert any(anomaly.anomaly_type == "queue_spike" for anomaly in response.anomalies)
+    assert all(anomaly.severity in {"INFO", "WARN", "CRITICAL"} for anomaly in response.anomalies)
+
+
 def test_store_analytics_routes_are_registered() -> None:
     # Read registered paths from the app's own OpenAPI contract rather than
     # walking app.routes directly: Starlette's internal representation of

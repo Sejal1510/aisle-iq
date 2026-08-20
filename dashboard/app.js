@@ -64,7 +64,12 @@ const elements = {
   peakHoursList: document.querySelector("#peak-hours-list"),
   comparisonPeriodLabel: document.querySelector("#comparison-period-label"),
   periodComparisonGrid: document.querySelector("#period-comparison-grid"),
+  whatChangedBanner: document.querySelector("#what-changed-banner"),
+  alertsSummary: document.querySelector("#alerts-summary"),
+  alertsList: document.querySelector("#alerts-list"),
 };
+
+const MAX_VISIBLE_ALERTS = 4;
 
 const metricCards = [
   ["Total Visitors", "total_visitors", formatNumber, "Customer visit sessions"],
@@ -408,7 +413,7 @@ async function loadLiveAnalytics() {
     setLiveAnalyticsAvailability(true);
 
     const query = rangeParams(range);
-    const [occCurrent, queueCurrent, queueMetrics, occHistory, footfall, queueHourly, peak, comparison] =
+    const [occCurrent, queueCurrent, queueMetrics, occHistory, footfall, queueHourly, peak, comparison, anomalies] =
       await Promise.all([
         fetchJson(`/stores/${state.storeId}/occupancy/current`),
         fetchJson(`/stores/${state.storeId}/queue/current`),
@@ -418,6 +423,9 @@ async function loadLiveAnalytics() {
         fetchJson(`/stores/${state.storeId}/queue/hourly?${query}`),
         fetchJson(`/stores/${state.storeId}/peak-hours?${query}`),
         fetchJson(`/stores/${state.storeId}/comparison?${query}`),
+        // Not one of the 8 P3 endpoints -- a pre-existing (pre-P3) endpoint
+        // that P4.3 extends with the same optional start/end convention.
+        fetchJson(`/stores/${state.storeId}/anomalies?${query}`),
       ]);
 
     renderAnalyticsKpis(occCurrent, queueCurrent, queueMetrics);
@@ -426,6 +434,8 @@ async function loadLiveAnalytics() {
     renderQueueActivityChart(queueHourly);
     renderPeakHours(peak);
     renderPeriodComparison(comparison);
+    renderAlerts(anomalies);
+    renderWhatChanged(anomalies);
   } catch (error) {
     setStatus(error.message);
   }
@@ -628,6 +638,67 @@ function formatDeltaBadge(delta) {
   const arrow = direction === "up" ? "▲" : direction === "down" ? "▼" : "—";
   const percentText = delta.percent === null ? "" : ` ${delta.percent > 0 ? "+" : ""}${Math.round(delta.percent * 100)}%`;
   return ` <span class="delta delta-${direction}">${arrow}${percentText}</span>`;
+}
+
+// ---------------------------------------------------------------------------
+// P4.3: trend-aware alerts. The /anomalies response mixes the pre-existing
+// static (all-time) rules with the new trend (comparison-driven) ones --
+// both render the same way here; only the "what changed" banner (below)
+// singles out trend alerts specifically.
+// ---------------------------------------------------------------------------
+
+function renderAlerts(response) {
+  const alerts = response.anomalies || [];
+  elements.alertsSummary.textContent = alerts.length
+    ? `${formatNumber(alerts.length)} ${alerts.length === 1 ? "alert" : "alerts"}`
+    : "0 alerts";
+
+  if (!alerts.length) {
+    // Honest empty state: absence of a fired rule, not a claim the store is
+    // doing well -- see the P4.3 plan's requirement 5.
+    elements.alertsList.innerHTML = `<div class="alerts-empty">No significant changes detected for this period.</div>`;
+    return;
+  }
+
+  // Alerts are already severity-sorted by the API; keep the panel from
+  // becoming a wall of cards by only ever showing the top few.
+  elements.alertsList.innerHTML = alerts
+    .slice(0, MAX_VISIBLE_ALERTS)
+    .map((alert) => {
+      const relatedMarkup = alert.related_signals && alert.related_signals.length
+        ? `<ul class="anomaly-related">${alert.related_signals.map((signal) => `<li>${escapeHtml(signal)}</li>`).join("")}</ul>`
+        : "";
+      return `
+        <article class="anomaly-card severity-${escapeHtml(alert.severity.toLowerCase())}">
+          <header>
+            <span class="anomaly-severity-label">${escapeHtml(alert.severity)}</span>
+            <span class="anomaly-category">${escapeHtml(titleCase(alert.anomaly_type.replace(/_/g, " ")))}</span>
+          </header>
+          <p>${escapeHtml(alert.message)}</p>
+          ${relatedMarkup}
+          <span class="anomaly-action">${escapeHtml(alert.suggested_action)}</span>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderWhatChanged(response) {
+  const alerts = response.anomalies || [];
+  // Only trend (comparison-driven) alerts are eligible for the headline --
+  // the static all-time rules (queue_spike etc) aren't period-over-period
+  // findings and don't belong in a "what changed" summary. The list is
+  // already severity-sorted, so the first trend match is the strongest one.
+  const strongest = alerts.find((alert) => alert.anomaly_type.startsWith("trend_"));
+
+  if (!strongest) {
+    elements.whatChangedBanner.hidden = true;
+    elements.whatChangedBanner.textContent = "";
+    return;
+  }
+
+  elements.whatChangedBanner.hidden = false;
+  elements.whatChangedBanner.textContent = strongest.message;
 }
 
 function formatBucketLabel(isoString) {

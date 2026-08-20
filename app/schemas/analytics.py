@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -62,11 +64,33 @@ class StoreHeatmapResponse(BaseModel):
 
 
 class StoreAnomaly(BaseModel):
+    """(store_id, anomaly_type) is not unique -- e.g. dead_zone emits one row
+    per zone. The P4.3 trend fields below are optional and default to
+    None/empty specifically so the pre-existing static rules (_queue_spike,
+    _conversion_drop, _dead_zone) never need to change how they construct
+    this model -- their output is byte-identical to before P4.3."""
+
     anomaly_type: str
     severity: str
     message: str
     suggested_action: str
     metric_value: float | int | None = None
+
+    # P4.3: populated only for trend-based (comparison-driven) anomalies --
+    # i.e. only when the caller supplied start/end to the anomalies endpoint.
+    # `related_signals` holds evidence-aware, non-causal observations about
+    # other metrics that moved alongside the primary one (see
+    # AnomalyService's clustering) -- never a claim that one caused the other.
+    metric: str | None = None
+    current_value: float | None = None
+    comparison_value: float | None = None
+    absolute_change: float | None = None
+    percent_change: float | None = None
+    current_period_start: datetime | None = None
+    current_period_end: datetime | None = None
+    previous_period_start: datetime | None = None
+    previous_period_end: datetime | None = None
+    related_signals: list[str] = Field(default_factory=list)
 
 
 class StoreAnomaliesResponse(BaseModel):

@@ -242,3 +242,100 @@ def test_existing_tabs_and_endpoints_are_unchanged() -> None:
         assert f'data-view="{view}"' in html
     assert 'id="comparison-grid"' in html  # store-vs-store, untouched
     assert 'id="period-comparison-grid"' in html  # new, distinct id -- no collision
+
+
+# ---------------------------------------------------------------------------
+# P4.3: trend-aware alerts panel + "what changed" banner in Live Analytics.
+# ---------------------------------------------------------------------------
+
+
+def test_p43_alerts_panel_and_banner_exist_in_html() -> None:
+    html = (DASHBOARD_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="what-changed-banner"' in html
+    assert 'id="alerts-list"' in html
+    assert 'id="alerts-summary"' in html
+    # Must live inside the same #analytics-content wrapper the 8 P3 panels
+    # already use, so the tab-level empty state hides it too, not just the
+    # existing panels.
+    content_section = html.split('id="analytics-content"')[1].split("</section>\n      </main>")[0]
+    assert "what-changed-banner" in content_section
+    assert "alerts-list" in content_section
+
+
+def test_p43_anomalies_call_uses_the_shared_range_and_is_not_eager() -> None:
+    """The anomalies fetch must ride the same lazy-loading/range machinery as
+    the 8 P3 calls -- not a separate eager fetch, and not fired at module
+    load time (see the P4.2 lazy-loading tests for the general pattern)."""
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "fetchJson(`/stores/${state.storeId}/anomalies?${query}`)" in script
+    # Inside the same Promise.all as the 8 P3 calls, not a second fetch call.
+    load_body = script.split("async function loadLiveAnalytics()")[1].split("\n}\n")[0]
+    assert "anomalies?${query}" in load_body
+
+
+def test_p43_render_functions_exist() -> None:
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "function renderAlerts(response)" in script
+    assert "function renderWhatChanged(response)" in script
+    assert "renderAlerts(anomalies)" in script
+    assert "renderWhatChanged(anomalies)" in script
+
+
+def test_p43_alerts_empty_state_is_honest_not_a_performance_claim() -> None:
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "No significant changes detected for this period." in script
+    # Must not claim the store is doing well -- only that no rule fired.
+    assert "performing well" not in script.lower()
+    assert "everything looks good" not in script.lower()
+
+
+def test_p43_alerts_panel_caps_visible_count() -> None:
+    """Requirement 5: the panel must not become a wall of cards."""
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "MAX_VISIBLE_ALERTS" in script
+    assert ".slice(0, MAX_VISIBLE_ALERTS)" in script
+
+
+def test_p43_related_signals_render_separately_from_the_primary_message() -> None:
+    """Requirement 1/4: an observed change and its related/contributing
+    signals must be visually distinguishable, not concatenated into one
+    unstructured sentence."""
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "alert.related_signals" in script
+    assert "anomaly-related" in script
+
+
+def test_p43_severity_css_uses_anomaly_vocabulary_not_insight_vocabulary() -> None:
+    """AnomalyService's severity vocabulary (INFO/WARN/CRITICAL) is different
+    from the Insights tab's (HIGH/MEDIUM/LOW) -- must not be lossily mapped
+    onto the wrong CSS classes."""
+    styles = (DASHBOARD_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert ".anomaly-card.severity-info" in styles
+    assert ".anomaly-card.severity-warn" in styles
+    assert ".anomaly-card.severity-critical" in styles
+
+
+def test_p43_does_not_expand_the_8_p3_endpoint_calls() -> None:
+    """Requirement 5 of the original P4.2 approval and requirement 5 of this
+    task: the 8 P3 endpoints stay exactly 8 -- anomalies is a 9th, separate,
+    pre-existing endpoint being extended, not a new P3 endpoint."""
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    for endpoint in [
+        "occupancy/current",
+        "occupancy/history",
+        "queue/current",
+        "queue/metrics",
+        "footfall/hourly",
+        "queue/hourly",
+        "peak-hours",
+        "comparison",
+    ]:
+        assert script.count(f"/{endpoint}") >= 1

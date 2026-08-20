@@ -64,8 +64,32 @@ def get_store_heatmap(store_id: str, db: Session = Depends(get_db)) -> StoreHeat
 
 
 @router.get("/stores/{store_id}/anomalies", response_model=StoreAnomaliesResponse)
-def get_store_anomalies(store_id: str, db: Session = Depends(get_db)) -> StoreAnomaliesResponse:
-    return AnomalyService(db).get_store_anomalies(store_id)
+def get_store_anomalies(
+    store_id: str,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    db: Session = Depends(get_db),
+) -> StoreAnomaliesResponse:
+    """P4.3: start/end are optional and additive. Omitting both keeps this
+    endpoint's pre-P4.3 behavior byte-identical (static rules only) -- a hard
+    backward-compatibility requirement. Supplying both additionally runs
+    trend (comparison-driven) rules. Supplying exactly one is a client error,
+    same convention as the ValueError->400 range endpoints elsewhere in this
+    file, rather than silently ignoring the stray parameter.
+
+    Deliberately a plain `= None` default, not `Query(None)`: this whole test
+    suite's established convention calls route functions directly (bypassing
+    FastAPI's dependency injection), and Query(None) resolves to a live
+    fastapi.Query sentinel object -- not real None -- when called that way,
+    which silently broke the pre-existing (pre-P4.3)
+    test_anomalies_endpoint_returns_operational_contract the moment these
+    params were added. A plain None default behaves identically for real
+    HTTP requests and is directly callable, which every other endpoint in
+    this file's existing test suite already relies on.
+    """
+    if (start is None) != (end is None):
+        raise HTTPException(status_code=400, detail="start and end must be provided together")
+    return _run_ranged(lambda: AnomalyService(db).get_store_anomalies(store_id, start=start, end=end))
 
 
 @router.get("/stores/{store_id}/insights", response_model=StoreInsightsResponse)
