@@ -5,6 +5,7 @@ uvicorn[standard]
 # Database
 sqlalchemy
 alembic
+psycopg[binary]  # PostgreSQL driver; only imported/connected to when DATABASE_URL is a postgresql:// URL
 
 # Validation
 pydantic
@@ -18,6 +19,7 @@ ruff
 
 # Testing (Development)
 pytest
+httpx  # required by fastapi.testclient.TestClient
 
 # CCTV Video Processing
 ultralytics
