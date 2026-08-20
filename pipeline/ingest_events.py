@@ -21,7 +21,7 @@ import json
 import pathlib
 import sys
 import time
-from typing import Tuple
+from typing import Optional, Tuple
 
 import structlog
 from sqlalchemy.orm import Session
@@ -31,6 +31,7 @@ from pydantic import TypeAdapter
 from app.db.session import SessionLocal, init_db
 from app.schemas.event import EventPayload
 from app.services.event_ingestion_service import EventIngestionService
+from app.services.visitor_inference_service import VisitorInferenceService
 
 # ----------------------------------------------------------------------
 # Configuration
@@ -45,24 +46,28 @@ logger = structlog.get_logger(__name__)
 _event_adapter = TypeAdapter(EventPayload)
 
 
-def _process_line(line: str, service: EventIngestionService) -> Tuple[bool, str]:
+def _process_line(line: str, service: EventIngestionService) -> Tuple[bool, str, Optional[str]]:
     """
     Parse a single JSON line and hand it to the service.
 
+    Staff/group inference is deferred (``run_inference=False``) -- ``main`` runs it
+    once per store per commit batch instead of once per line, so a run over
+    thousands of lines does not trigger thousands of full-store rescans.
+
     Returns
     -------
-    (bool, str)
-        *True* and an empty message on success,
-        *False* and the error message on failure.
+    (bool, str, str | None)
+        *True*, an empty message, and the event's store_id on success,
+        *False*, the error message, and *None* on failure.
     """
     try:
         payload_dict = json.loads(line.strip())
         # Validation using TypeAdapter (required for a discriminated Union)
         payload = _event_adapter.validate_python(payload_dict)
-        service.process_event(payload)  # persistence (no commit here)
-        return True, ""
+        event = service.process_event(payload, run_inference=False)  # persistence (no commit here)
+        return True, "", event.store_id
     except Exception as exc:  # pylint: disable=broad-except
-        return False, str(exc)
+        return False, str(exc), None
 
 
 def main(events_path: pathlib.Path = DEFAULT_EVENTS_PATH) -> None:
@@ -78,6 +83,7 @@ def main(events_path: pathlib.Path = DEFAULT_EVENTS_PATH) -> None:
     failure_cnt = 0
     processed_cnt = 0
     batch_counter = 0
+    touched_stores: set[str] = set()
 
     start_ts = time.time()
 
@@ -87,12 +93,14 @@ def main(events_path: pathlib.Path = DEFAULT_EVENTS_PATH) -> None:
                 if not raw.strip():
                     continue
 
-                ok, err_msg = _process_line(raw, service)
+                ok, err_msg, store_id = _process_line(raw, service)
                 processed_cnt += 1
                 batch_counter += 1
 
                 if ok:
                     success_cnt += 1
+                    if store_id:
+                        touched_stores.add(store_id)
                 else:
                     failure_cnt += 1
                     logger.error(
@@ -103,10 +111,11 @@ def main(events_path: pathlib.Path = DEFAULT_EVENTS_PATH) -> None:
                     )
 
                 # ------------------------------------------------------------------
-                # Batch commit handling – commit every BATCH_SIZE records
+                # Batch commit handling – commit every BATCH_SIZE records, running
+                # staff/group inference once per touched store in that batch
                 # ------------------------------------------------------------------
                 if batch_counter >= BATCH_SIZE:
-                    db.commit()
+                    _run_inference_and_commit(db, touched_stores)
                     batch_counter = 0
 
                 # ------------------------------------------------------------------
@@ -121,8 +130,8 @@ def main(events_path: pathlib.Path = DEFAULT_EVENTS_PATH) -> None:
                     )
 
         # Commit any remaining records that didn’t fill a full batch
-        if batch_counter > 0:
-            db.commit()
+        if batch_counter > 0 or touched_stores:
+            _run_inference_and_commit(db, touched_stores)
 
     except Exception as e:  # Unexpected fatal error (e.g., file not found)
         logger.critical("batch_ingestion_crashed", error=str(e))
@@ -143,6 +152,15 @@ def main(events_path: pathlib.Path = DEFAULT_EVENTS_PATH) -> None:
         duration_seconds=round(duration_sec, 2),
         throughput_events_per_sec=round(throughput, 2),
     )
+
+
+def _run_inference_and_commit(db: Session, touched_stores: set) -> None:
+    """Run staff/group inference once for each store touched since the last commit
+    batch, then commit both the pending events and the inference updates together."""
+    for store_id in touched_stores:
+        VisitorInferenceService(db).infer_store(store_id)
+    db.commit()
+    touched_stores.clear()
 
 
 if __name__ == "__main__":

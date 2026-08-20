@@ -33,6 +33,7 @@ class CanonicalEventType(str, Enum):
     ZONE_EXIT = "ZONE_EXIT"
     ZONE_DWELL = "ZONE_DWELL"
     BILLING_QUEUE_JOIN = "BILLING_QUEUE_JOIN"
+    BILLING_QUEUE_COMPLETE = "BILLING_QUEUE_COMPLETE"
     BILLING_QUEUE_ABANDON = "BILLING_QUEUE_ABANDON"
     REENTRY = "REENTRY"
 
@@ -144,6 +145,7 @@ class CanonicalEvent(BaseEvent):
         CanonicalEventType.ZONE_EXIT,
         CanonicalEventType.ZONE_DWELL,
         CanonicalEventType.BILLING_QUEUE_JOIN,
+        CanonicalEventType.BILLING_QUEUE_COMPLETE,
         CanonicalEventType.BILLING_QUEUE_ABANDON,
         CanonicalEventType.REENTRY,
     ]

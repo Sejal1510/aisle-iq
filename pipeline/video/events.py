@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import datetime
 from uuid import uuid4
 
 from pipeline.video.config import CameraRole, EntryLine, Point, PolygonZone, VideoProcessingConfig
@@ -14,6 +14,7 @@ class QueueState:
     last_seen_at: datetime
     position_at_join: int
     hotspot: tuple[float, float]
+    queue_event_id: str = field(default_factory=lambda: str(uuid4()))
 
 
 class VideoEventGenerator:
@@ -36,7 +37,7 @@ class VideoEventGenerator:
     def finalize(self) -> list[dict]:
         events: list[dict] = []
         for track_id, state in list(self._active_queue_by_track.items()):
-            events.append(self._queue_event(track_id, state, state.last_seen_at, completed=False))
+            events.append(self._queue_terminal_event(track_id, state, state.last_seen_at, completed=False))
             del self._active_queue_by_track[track_id]
         return events
 
@@ -94,15 +95,17 @@ class VideoEventGenerator:
 
         if inside_queue:
             if state is None:
-                self._active_queue_by_track[snapshot.track_id] = QueueState(
+                new_state = QueueState(
                     joined_at=snapshot.timestamp,
                     last_seen_at=snapshot.timestamp,
                     position_at_join=len(self._active_queue_by_track) + 1,
                     hotspot=snapshot.normalized_footpoint,
                 )
-            else:
-                state.last_seen_at = snapshot.timestamp
-                state.hotspot = snapshot.normalized_footpoint
+                self._active_queue_by_track[snapshot.track_id] = new_state
+                return [self._queue_join_event(snapshot, new_state)]
+
+            state.last_seen_at = snapshot.timestamp
+            state.hotspot = snapshot.normalized_footpoint
             return []
 
         if state is None:
@@ -114,7 +117,7 @@ class VideoEventGenerator:
             return []
 
         completed = dwell_seconds >= self.config.queue_completion_seconds
-        return [self._queue_event(snapshot.track_id, state, snapshot.timestamp, completed=completed)]
+        return [self._queue_terminal_event(snapshot.track_id, state, snapshot.timestamp, completed=completed)]
 
     def _zone_event(self, *, snapshot: TrackSnapshot, zone: PolygonZone, event_type: str) -> dict:
         hotspot_x, hotspot_y = snapshot.normalized_footpoint
@@ -141,30 +144,71 @@ class VideoEventGenerator:
             },
         }
 
-    def _queue_event(self, track_id: str, state: QueueState, exit_ts: datetime, *, completed: bool) -> dict:
+    def _queue_join_event(self, snapshot: TrackSnapshot, state: QueueState) -> dict:
+        """Emitted the moment a track's footpoint enters the queue polygon.
+
+        This is a distinct lifecycle event from the terminal COMPLETE/ABANDON event
+        emitted later in ``_queue_terminal_event`` — the two share ``queue_event_id``
+        so they can be correlated as the same queue visit.
+        """
         queue_zone = self._queue_zone()
-        served_ts = exit_ts - timedelta(seconds=3) if completed else None
-        wait_seconds = int(((served_ts or exit_ts) - state.joined_at).total_seconds())
+        hotspot_x, hotspot_y = state.hotspot
+        return {
+            "event_id": str(uuid4()),
+            "store_id": snapshot.store_id,
+            "camera_id": snapshot.camera_id,
+            "visitor_id": _video_identity(snapshot),
+            "event_type": "BILLING_QUEUE_JOIN",
+            "timestamp": state.joined_at.isoformat(),
+            "zone_id": queue_zone.id if queue_zone else f"{self.config.camera_id}_QUEUE",
+            "dwell_ms": 0,
+            "is_staff": False,
+            "confidence": round(snapshot.confidence, 4),
+            "metadata": {
+                "queue_event_id": state.queue_event_id,
+                "legacy_event_type": "queue_join",
+                "queue_depth": state.position_at_join,
+                "queue_join_ts": state.joined_at.isoformat(),
+                "sku_zone": queue_zone.name if queue_zone else "Billing Queue",
+                "zone_type": "BILLING",
+                "is_revenue_zone": "Yes",
+                "hotspot_x": round(hotspot_x, 4),
+                "hotspot_y": round(hotspot_y, 4),
+                "session_seq": None,
+            },
+        }
+
+    def _queue_terminal_event(self, track_id: str, state: QueueState, exit_ts: datetime, *, completed: bool) -> dict:
+        """Emitted when a track leaves the queue polygon, closing out the visit opened
+        by ``_queue_join_event``.
+
+        ``wait_seconds`` is always ``exit_ts - state.joined_at`` — the only two
+        timestamps the pipeline actually observes. There is no signal for when
+        service started, so no served-time is fabricated; ``queue_served_ts`` is
+        left ``None``.
+        """
+        queue_zone = self._queue_zone()
+        wait_seconds = max(0, int((exit_ts - state.joined_at).total_seconds()))
         hotspot_x, hotspot_y = state.hotspot
         return {
             "event_id": str(uuid4()),
             "store_id": self.config.store_id,
             "camera_id": self.config.camera_id,
             "visitor_id": f"{self.config.camera_id}:{track_id}",
-            "event_type": "BILLING_QUEUE_JOIN" if completed else "BILLING_QUEUE_ABANDON",
-            "timestamp": (state.joined_at if completed else exit_ts).isoformat(),
+            "event_type": "BILLING_QUEUE_COMPLETE" if completed else "BILLING_QUEUE_ABANDON",
+            "timestamp": exit_ts.isoformat(),
             "zone_id": queue_zone.id if queue_zone else f"{self.config.camera_id}_QUEUE",
-            "dwell_ms": max(0, wait_seconds) * 1000,
+            "dwell_ms": wait_seconds * 1000,
             "is_staff": False,
             "confidence": 0.8,
             "metadata": {
-                "queue_event_id": str(uuid4()),
+                "queue_event_id": state.queue_event_id,
                 "legacy_event_type": "queue_completed" if completed else "queue_abandoned",
                 "queue_depth": state.position_at_join,
                 "queue_join_ts": state.joined_at.isoformat(),
-                "queue_served_ts": served_ts.isoformat() if served_ts else None,
+                "queue_served_ts": None,
                 "queue_exit_ts": exit_ts.isoformat(),
-                "wait_seconds": max(0, wait_seconds),
+                "wait_seconds": wait_seconds,
                 "queue_position_at_join": state.position_at_join,
                 "abandoned": not completed,
                 "sku_zone": queue_zone.name if queue_zone else "Billing Queue",

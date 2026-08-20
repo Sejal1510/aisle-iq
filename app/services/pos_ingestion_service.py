@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 import structlog
 
 from app.models.pos import PosTransaction, PosTransactionItem
-from app.models.store import Store
 from app.schemas.pos import PosImportResult, PosRow
+from app.services.reference_data_service import ReferenceDataService
 
 
 logger = structlog.get_logger(__name__)
@@ -19,6 +19,7 @@ logger = structlog.get_logger(__name__)
 class PosIngestionService:
     def __init__(self, db: Session):
         self.db = db
+        self.reference_data = ReferenceDataService(db)
         self._ensured_store_ids: set[str] = set()
 
     def import_rows(self, raw_rows: Iterable[dict]) -> PosImportResult:
@@ -81,8 +82,5 @@ class PosIngestionService:
         if store_id in self._ensured_store_ids:
             return
 
-        store = self.db.get(Store, store_id)
-        if store is None:
-            self.db.add(Store(id=store_id, name=None))
-
+        self.reference_data.ensure_store(store_id)
         self._ensured_store_ids.add(store_id)

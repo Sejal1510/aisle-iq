@@ -113,48 +113,122 @@ def test_zone_camera_generates_zone_entered_and_exited() -> None:
     assert exited[0]["event_type"] == "ZONE_EXIT"
 
 
-def test_billing_camera_generates_queue_completed_after_threshold() -> None:
-    generator = VideoEventGenerator(
-        config(
-            CameraRole.BILLING,
-            zones=(square_zone("QUEUE_1"),),
-            queue_zone_id="QUEUE_1",
-            queue_completion_seconds=30,
-            queue_abandonment_seconds=5,
-        )
+def _billing_config() -> VideoProcessingConfig:
+    return config(
+        CameraRole.BILLING,
+        zones=(square_zone("QUEUE_1"),),
+        queue_zone_id="QUEUE_1",
+        queue_completion_seconds=30,
+        queue_abandonment_seconds=5,
     )
 
-    assert generator.process_snapshot(snapshot(normalized_footpoint=(0.50, 0.50))) == []
+
+def test_billing_camera_emits_join_event_immediately() -> None:
+    """F-01: JOIN must fire the moment a track enters the queue polygon, not
+    retroactively once it leaves."""
+    generator = VideoEventGenerator(_billing_config())
+
+    joined = generator.process_snapshot(snapshot(normalized_footpoint=(0.50, 0.50)))
+
+    assert len(joined) == 1
+    assert joined[0]["event_type"] == "BILLING_QUEUE_JOIN"
+    assert joined[0]["metadata"]["queue_event_id"]
+    assert joined[0]["metadata"]["queue_join_ts"] is not None
+
+
+def test_billing_camera_generates_queue_completed_after_threshold() -> None:
+    generator = VideoEventGenerator(_billing_config())
+
+    joined = generator.process_snapshot(snapshot(normalized_footpoint=(0.50, 0.50)))
     completed = generator.process_snapshot(
         snapshot(timestamp=BASE_TIME + timedelta(seconds=35), normalized_footpoint=(0.90, 0.90))
     )
 
-    assert completed[0]["event_type"] == "BILLING_QUEUE_JOIN"
+    assert joined[0]["event_type"] == "BILLING_QUEUE_JOIN"
+    assert completed[0]["event_type"] == "BILLING_QUEUE_COMPLETE"
     assert completed[0]["metadata"]["abandoned"] is False
-    assert completed[0]["metadata"]["queue_served_ts"] is not None
-    assert completed[0]["metadata"]["wait_seconds"] == 32
+    assert completed[0]["metadata"]["queue_served_ts"] is None
+    assert completed[0]["metadata"]["wait_seconds"] == 35
+    assert completed[0]["metadata"]["queue_event_id"] == joined[0]["metadata"]["queue_event_id"]
 
 
 def test_billing_camera_generates_queue_abandoned_for_short_queue_exit() -> None:
-    generator = VideoEventGenerator(
-        config(
-            CameraRole.BILLING,
-            zones=(square_zone("QUEUE_1"),),
-            queue_zone_id="QUEUE_1",
-            queue_completion_seconds=30,
-            queue_abandonment_seconds=5,
-        )
-    )
+    generator = VideoEventGenerator(_billing_config())
 
-    assert generator.process_snapshot(snapshot(normalized_footpoint=(0.50, 0.50))) == []
+    joined = generator.process_snapshot(snapshot(normalized_footpoint=(0.50, 0.50)))
     abandoned = generator.process_snapshot(
         snapshot(timestamp=BASE_TIME + timedelta(seconds=12), normalized_footpoint=(0.90, 0.90))
     )
 
+    assert joined[0]["event_type"] == "BILLING_QUEUE_JOIN"
     assert abandoned[0]["event_type"] == "BILLING_QUEUE_ABANDON"
     assert abandoned[0]["metadata"]["abandoned"] is True
     assert abandoned[0]["metadata"]["queue_served_ts"] is None
     assert abandoned[0]["metadata"]["wait_seconds"] == 12
+    assert abandoned[0]["metadata"]["queue_event_id"] == joined[0]["metadata"]["queue_event_id"]
+
+
+def test_billing_camera_short_boundary_dwell_emits_join_but_no_terminal_event() -> None:
+    """Dwell below queue_abandonment_seconds is boundary noise: per the existing
+    design, no terminal event is produced for it. JOIN still fires at entry --
+    the pipeline cannot know in advance how long a visit will last."""
+    generator = VideoEventGenerator(_billing_config())
+
+    joined = generator.process_snapshot(snapshot(normalized_footpoint=(0.50, 0.50)))
+    exited = generator.process_snapshot(
+        snapshot(timestamp=BASE_TIME + timedelta(seconds=2), normalized_footpoint=(0.90, 0.90))
+    )
+
+    assert len(joined) == 1
+    assert joined[0]["event_type"] == "BILLING_QUEUE_JOIN"
+    assert exited == []
+
+
+def test_completed_queue_is_never_labeled_as_join() -> None:
+    """Regression guard for the original defect: a completed queue visit's
+    terminal event must never come back labeled BILLING_QUEUE_JOIN."""
+    generator = VideoEventGenerator(_billing_config())
+
+    generator.process_snapshot(snapshot(normalized_footpoint=(0.50, 0.50)))
+    terminal_events = generator.process_snapshot(
+        snapshot(timestamp=BASE_TIME + timedelta(seconds=40), normalized_footpoint=(0.90, 0.90))
+    )
+
+    assert len(terminal_events) == 1
+    assert terminal_events[0]["event_type"] != "BILLING_QUEUE_JOIN"
+    assert terminal_events[0]["event_type"] == "BILLING_QUEUE_COMPLETE"
+
+
+def test_billing_camera_full_visit_produces_exactly_join_and_complete() -> None:
+    """Integration-style: JOIN, then an exit after the completion threshold,
+    produces exactly [JOIN, COMPLETE] across the interaction -- nothing more,
+    nothing mislabeled."""
+    generator = VideoEventGenerator(_billing_config())
+
+    all_events: list[dict] = []
+    all_events += generator.process_snapshot(snapshot(normalized_footpoint=(0.50, 0.50)))
+    all_events += generator.process_snapshot(
+        snapshot(timestamp=BASE_TIME + timedelta(seconds=10), normalized_footpoint=(0.55, 0.55))
+    )
+    all_events += generator.process_snapshot(
+        snapshot(timestamp=BASE_TIME + timedelta(seconds=35), normalized_footpoint=(0.90, 0.90))
+    )
+
+    assert [event["event_type"] for event in all_events] == ["BILLING_QUEUE_JOIN", "BILLING_QUEUE_COMPLETE"]
+
+
+def test_billing_camera_full_visit_produces_exactly_join_and_abandon() -> None:
+    """Integration-style: JOIN, then an exit after the abandonment threshold but
+    before completion, produces exactly [JOIN, ABANDON]."""
+    generator = VideoEventGenerator(_billing_config())
+
+    all_events: list[dict] = []
+    all_events += generator.process_snapshot(snapshot(normalized_footpoint=(0.50, 0.50)))
+    all_events += generator.process_snapshot(
+        snapshot(timestamp=BASE_TIME + timedelta(seconds=12), normalized_footpoint=(0.90, 0.90))
+    )
+
+    assert [event["event_type"] for event in all_events] == ["BILLING_QUEUE_JOIN", "BILLING_QUEUE_ABANDON"]
 
 
 def test_jsonl_writer_keeps_one_parseable_event_per_line() -> None:

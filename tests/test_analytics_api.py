@@ -81,7 +81,13 @@ def test_anomalies_endpoint_returns_operational_contract(api_session: Session) -
 
 
 def test_store_analytics_routes_are_registered() -> None:
-    route_paths = {route.path for route in app.routes}
+    # Read registered paths from the app's own OpenAPI contract rather than
+    # walking app.routes directly: Starlette's internal representation of
+    # included routers is not a stable API (a Starlette upgrade during this
+    # phase changed it to a wrapper object with no `.path` attribute), while
+    # the OpenAPI schema is the public, documented surface this test actually
+    # cares about.
+    route_paths = set(app.openapi()["paths"].keys())
 
     assert "/stores/{store_id}/metrics" in route_paths
     assert "/stores/{store_id}/funnel" in route_paths

@@ -1,5 +1,5 @@
 from typing import Optional
-from sqlalchemy import Boolean, Integer, String, Float, ForeignKey, Text
+from sqlalchemy import Boolean, Integer, String, Float, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 from sqlalchemy.sql import func
@@ -9,10 +9,17 @@ from app.db.base import Base
 from app.models.enums import EventType
 
 class Event(Base):
+    """The idempotency key is (store_id, source_event_id), not source_event_id
+    alone: a bare-global-unique source_event_id would let one store's event
+    silently block a different store's event that happens to reuse the same
+    source-provided id (e.g. two independent CCTV systems both starting an
+    incrementing counter at 1). See EventIngestionService.process_event for
+    the corresponding lookup."""
+
     __tablename__ = "event"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    source_event_id: Mapped[Optional[str]] = mapped_column(String, unique=True, index=True)
+    source_event_id: Mapped[Optional[str]] = mapped_column(String, index=True)
     session_id: Mapped[str] = mapped_column(ForeignKey("visit_session.id"), index=True)
     tracked_entity_id: Mapped[str] = mapped_column(ForeignKey("tracked_entity.id"), index=True)
     store_id: Mapped[str] = mapped_column(ForeignKey("store.id"), index=True)
@@ -36,3 +43,7 @@ class Event(Base):
 
     session: Mapped["VisitSession"] = relationship(back_populates="events")
     tracked_entity: Mapped["TrackedEntity"] = relationship(back_populates="events")
+
+    __table_args__ = (
+        UniqueConstraint("store_id", "source_event_id", name="uq_event_store_source_event_id"),
+    )

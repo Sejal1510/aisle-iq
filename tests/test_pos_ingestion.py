@@ -14,7 +14,7 @@ from app.schemas.pos import PosRow
 from app.services.pos_ingestion_service import PosIngestionService
 
 
-POS_SAMPLE_PATH = Path(__file__).parent.parent / "data" / "POS - sample transactionsb1e826f (1).csv"
+POS_SAMPLE_PATH = Path(__file__).parent / "fixtures" / "pos_sample.csv"
 
 
 @pytest.fixture()

@@ -1,5 +1,5 @@
 from typing import List, Optional
-from sqlalchemy import String, Float, ForeignKey, Text
+from sqlalchemy import String, Float, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 from sqlalchemy.sql import func
@@ -9,6 +9,11 @@ from app.db.base import Base
 from app.models.enums import CorrelationStatus
 
 class PosTransaction(Base):
+    """(store_id, order_id) is the idempotency key, enforced at the database
+    level -- previously this was only checked with a SELECT-then-insert in
+    PosIngestionService, which is a race under concurrent import of the same
+    file/order."""
+
     __tablename__ = "pos_transaction"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -19,6 +24,10 @@ class PosTransaction(Base):
 
     items: Mapped[List["PosTransactionItem"]] = relationship(back_populates="transaction", cascade="all, delete-orphan")
     correlations: Mapped[List["TransactionCorrelation"]] = relationship(back_populates="transaction", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("store_id", "order_id", name="uq_pos_transaction_store_order_id"),
+    )
 
 class PosTransactionItem(Base):
     __tablename__ = "pos_transaction_item"

@@ -9,10 +9,13 @@ from pydantic import TypeAdapter
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.security import create_api_key
 from app.models import Base
+from app.models.auth import ApiKey
 from app.models.enums import EventType, SessionStatus
 from app.models.event import Event
-from app.models.tracking import TrackedEntity, VisitSession
+from app.models.store import Store
+from app.models.tracking import STORE_SCOPED_CAMERA_ID, IdentityAlias, TrackedEntity, VisitSession
 from app.api.events import ingest_events
 from app.schemas.event import (
     EventPayload,
@@ -23,9 +26,46 @@ from app.schemas.event import (
 )
 from app.services.event_ingestion_service import EventIngestionService
 from app.services.analytics_service import AnalyticsService
+from app.services.visitor_inference_service import VisitorInferenceService
 
 
-SAMPLE_EVENTS_PATH = Path(__file__).parent.parent / "data" / "sample_eventsbe42122 (1).jsonl"
+SAMPLE_EVENTS_PATH = Path(__file__).parent / "fixtures" / "sample_events.jsonl"
+
+
+def _make_api_key(db_session: Session, store_id: str) -> ApiKey:
+    """Build a real ApiKey for tests that call the ingest_event(s) route
+    functions directly (bypassing FastAPI's dependency injection, which would
+    otherwise resolve api_key: ApiKey = Depends(require_api_key))."""
+    if db_session.get(Store, store_id) is None:
+        db_session.add(Store(id=store_id, name=None))
+        db_session.flush()
+    api_key, _raw_key = create_api_key(db_session, store_id)
+    db_session.flush()
+    return api_key
+
+
+def _tracked_entity_id_for(
+    db_session: Session,
+    *,
+    store_id: str,
+    source_field: str,
+    source_value: str,
+    camera_scoped: bool,
+    camera_id: str | None = None,
+) -> str | None:
+    """Resolve a raw source identifier to its current canonical TrackedEntity id
+    via the persisted IdentityAlias row, mirroring
+    EventIngestionService._resolve_tracked_entity's lookup key."""
+    alias_camera_scope = camera_id if camera_scoped else STORE_SCOPED_CAMERA_ID
+    alias = db_session.execute(
+        select(IdentityAlias).where(
+            IdentityAlias.store_id == store_id,
+            IdentityAlias.camera_id == alias_camera_scope,
+            IdentityAlias.source_field == source_field,
+            IdentityAlias.source_value == source_value,
+        )
+    ).scalar_one_or_none()
+    return alias.tracked_entity_id if alias else None
 
 
 @pytest.fixture()
@@ -185,10 +225,21 @@ def test_re_entry_creates_new_visit_without_merging_dwell(
     service.process_event(event_adapter.validate_python(second_exit))
     db_session.commit()
 
+    # P2.1: identity resolves through IdentityAlias to a UUID TrackedEntity id,
+    # not a bare source id_token -- look the entity up the same way ingestion
+    # does rather than assuming an id format.
+    canonical_entity_id = _tracked_entity_id_for(
+        db_session,
+        store_id=first_entry["store_code"],
+        source_field="id_token",
+        source_value=first_entry["id_token"],
+        camera_scoped=False,
+    )
+    assert canonical_entity_id is not None
     sessions = list(
         db_session.scalars(
             select(VisitSession)
-            .where(VisitSession.tracked_entity_id == first_entry["id_token"])
+            .where(VisitSession.tracked_entity_id == canonical_entity_id)
             .order_by(VisitSession.entry_time)
         )
     )
@@ -249,9 +300,10 @@ def test_batch_ingest_is_idempotent_and_reports_partial_failures(db_session: Ses
         "confidence": 0.91,
         "metadata": {"queue_depth": None, "session_seq": 1},
     }
+    api_key = _make_api_key(db_session, "STBATCH")
 
-    first = ingest_events([valid_event], db=db_session)
-    second = ingest_events([valid_event, {"event_type": "ENTRY"}], db=db_session)
+    first = ingest_events([valid_event], db=db_session, api_key=api_key)
+    second = ingest_events([valid_event, {"event_type": "ENTRY"}], db=db_session, api_key=api_key)
 
     assert first["accepted"] == 1
     assert second["duplicates"] == 1
@@ -269,10 +321,122 @@ def test_all_sample_events_validate_and_ingest(db_session: Session, event_adapte
     db_session.commit()
 
     assert db_session.scalar(select(func.count()).select_from(Event)) == 13
-    assert db_session.scalar(select(func.count()).select_from(TrackedEntity)) == 6
+    # 9, not 6: 3 id_token entities (store-scoped, not camera-scoped) + 3 track_id
+    # entities seen on the zone cameras + 3 track_id entities seen on the billing
+    # camera. The fixture reuses track_id values 101/102/103 across the zone and
+    # billing cameras, but P2.1's identity resolution is camera-scoped for
+    # track_id (ByteTrack ids are camera-local, not guaranteed to correlate
+    # across cameras) -- so a reused track_id number on a different camera
+    # resolves to a different TrackedEntity, not the same one. That is the
+    # intended behavior: merging them without evidence would be exactly the
+    # unjustified cross-camera identity assumption this phase does not make.
+    assert db_session.scalar(select(func.count()).select_from(TrackedEntity)) == 9
     assert db_session.scalar(
         select(func.count()).select_from(Event).where(Event.event_type == EventType.QUEUE_COMPLETED)
     ) == 2
     assert db_session.scalar(
         select(func.count()).select_from(Event).where(Event.event_type == EventType.QUEUE_ABANDONED)
     ) == 1
+
+
+def test_identity_lookup_is_store_scoped(db_session: Session, event_adapter: TypeAdapter) -> None:
+    """F-02 regression: a raw track_id/id_token is never globally unique across
+    stores. The same numeric track_id ingested for two different stores must
+    produce two distinct TrackedEntity rows, never a merged one."""
+    service = EventIngestionService(db_session)
+    base_zone_event = payload_for("zone_entered")
+    track_id = str(base_zone_event["track_id"])
+
+    store_a_event = {**base_zone_event, "store_id": "ST_IDENTITY_A"}
+    store_b_event = {**base_zone_event, "store_id": "ST_IDENTITY_B"}
+
+    service.process_event(event_adapter.validate_python(store_a_event))
+    service.process_event(event_adapter.validate_python(store_b_event))
+    db_session.commit()
+
+    camera_id = base_zone_event["camera_id"]
+    entity_a_id = _tracked_entity_id_for(
+        db_session, store_id="ST_IDENTITY_A", source_field="track_id", source_value=track_id,
+        camera_scoped=True, camera_id=camera_id,
+    )
+    entity_b_id = _tracked_entity_id_for(
+        db_session, store_id="ST_IDENTITY_B", source_field="track_id", source_value=track_id,
+        camera_scoped=True, camera_id=camera_id,
+    )
+    entity_a = db_session.get(TrackedEntity, entity_a_id) if entity_a_id else None
+    entity_b = db_session.get(TrackedEntity, entity_b_id) if entity_b_id else None
+
+    assert entity_a is not None
+    assert entity_b is not None
+    assert entity_a.id != entity_b.id
+    assert entity_a.store_id == "ST_IDENTITY_A"
+    assert entity_b.store_id == "ST_IDENTITY_B"
+    assert db_session.scalar(
+        select(func.count())
+        .select_from(TrackedEntity)
+        .where(TrackedEntity.store_id.in_(["ST_IDENTITY_A", "ST_IDENTITY_B"]))
+    ) == 2
+
+
+def test_identity_lookup_reuses_entity_within_same_store(db_session: Session, event_adapter: TypeAdapter) -> None:
+    """Same-store behavior must remain correct: repeated events for the same
+    store_id + track_id reuse one TrackedEntity, not one per event."""
+    service = EventIngestionService(db_session)
+    zone_entered = payload_for("zone_entered")
+    zone_exited = payload_for("zone_exited")
+    track_id = zone_entered["track_id"]
+
+    same_store_entered = {**zone_entered, "store_id": "ST_IDENTITY_SAME", "track_id": track_id}
+    same_store_exited = {
+        **zone_exited,
+        "store_id": "ST_IDENTITY_SAME",
+        "track_id": track_id,
+        "event_time": "2026-05-01T09:05:00",
+    }
+
+    service.process_event(event_adapter.validate_python(same_store_entered))
+    service.process_event(event_adapter.validate_python(same_store_exited))
+    db_session.commit()
+
+    assert db_session.scalar(
+        select(func.count()).select_from(TrackedEntity).where(TrackedEntity.store_id == "ST_IDENTITY_SAME")
+    ) == 1
+
+
+def test_batch_does_not_rescan_full_history_per_event(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F-04 regression: batch ingestion must run staff/group inference once per
+    touched store after the whole batch, not once per event inside it."""
+    call_count = {"n": 0}
+    original_infer_store = VisitorInferenceService.infer_store
+
+    def counting_infer_store(self, store_id):
+        call_count["n"] += 1
+        return original_infer_store(self, store_id)
+
+    monkeypatch.setattr(VisitorInferenceService, "infer_store", counting_infer_store)
+
+    events = [
+        {
+            "event_id": str(uuid4()),
+            "store_id": "ST_BATCH_PERF",
+            "camera_id": "CAM_ENTRY",
+            "visitor_id": f"VIS_{index}",
+            "event_type": "ENTRY",
+            "timestamp": f"2026-06-01T10:{index:02d}:00Z",
+            "zone_id": None,
+            "dwell_ms": 0,
+            "is_staff": False,
+            "confidence": 0.9,
+            "metadata": {"queue_depth": None, "session_seq": 1},
+        }
+        for index in range(10)
+    ]
+    api_key = _make_api_key(db_session, "ST_BATCH_PERF")
+
+    result = ingest_events(events, db=db_session, api_key=api_key)
+
+    assert result["accepted"] == 10
+    assert call_count["n"] == 1
