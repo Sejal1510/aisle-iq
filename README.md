@@ -86,6 +86,17 @@ python -c "from app.db.session import init_db, SessionLocal; from app.services.c
 
 The last command is the exact correlation rerun command. It clears existing `TransactionCorrelation` rows and recomputes matches from the current visits and POS transactions.
 
+### Synthetic CCTV Demo Data (P4)
+
+`data/generated_cctv_events.jsonl` (the mandatory deliverable) predates the current queue-lifecycle model and spans about two minutes of simulated time -- not enough to demonstrate live occupancy, hourly footfall, peak-hour ranking, or period comparison. `pipeline/generate_demo_cctv.py` generates a separate, clearly-labeled-synthetic event stream for that purpose, the same way `pipeline/generate_demo_pos.py` already does for POS data. It **never modifies `data/generated_cctv_events.jsonl`**.
+
+```powershell
+python -m pipeline.generate_demo_cctv
+python -m pipeline.ingest_events data/demo_cctv_events_st1001_st1002.jsonl
+```
+
+This is deterministic, offline generation -- no source video, model weights, or external service involved. The same `--seed` (default fixed) always produces byte-identical output. Every generated id is prefixed `DEMO-`. It covers two simulated days for ST1001 (lunch-hour traffic peak) and ST1002 (morning/evening commute peaks), with entries, exits, zone visits, and queue joins/completions/abandonments -- including a couple of queue visits deliberately left incomplete so "current" queue/occupancy endpoints have something live to show. Run with `--seed <int>` to generate a different (still deterministic) scenario, or `--output <path>` to write elsewhere.
+
 ## Demo Walkthrough
 
 Run these commands from the repository root.
@@ -182,6 +193,7 @@ The project distinguishes original challenge data, generated event logs, and dem
 - Original challenge POS sample: retained as source data for POS schema validation and product/brand patterns. It belongs to a different store than the generated CCTV event stores, so the correlation engine should not force a match.
 - Generated CCTV events: `data/generated_cctv_events.jsonl` is the mandatory event-log deliverable emitted by the video pipeline and validated against the project event schema.
 - Generated demo POS fixture: `data/demo_pos_st1001_st1002.csv` is synthetic alignment data for dashboard evaluation. It exists because the original POS sample store does not align with the generated CCTV dashboard stores.
+- Generated demo CCTV events: `data/demo_cctv_events_st1001_st1002.jsonl` (see "Synthetic CCTV Demo Data" above) is a separate, deterministic, clearly-labeled-synthetic event stream that exercises P3's live/time-based analytics, since the mandatory `generated_cctv_events.jsonl` deliverable is too short and predates the current queue-lifecycle model to do so.
 
 The demo POS fixture is transparent and ethical: it is not represented as original observed sales. It allows judges to evaluate conversion, revenue attribution, and POS correlation behavior without hardcoded UI metrics. Generated demo checkout events are deterministic support facts used to exercise the unchanged correlation service. Dashboard revenue and conversion metrics still come from persisted POS, visit, event, and correlation records.
 
