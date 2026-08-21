@@ -2,15 +2,30 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from datetime import datetime, timedelta, timezone
 
+import bcrypt
+import jwt
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.session import get_db
-from app.models.auth import ApiKey
+from app.models.auth import ApiKey, StoreAccess, User
+from app.models.enums import Role
 
 API_KEY_HEADER = "X-API-Key"
+
+# Fixed rank for "does this role satisfy that minimum" checks -- lower is
+# more privileged. Deliberately not enum declaration order or a comparison
+# operator on Role itself, so the ranking is explicit and grep-able at one
+# call site (_role_satisfies) rather than implied by enum member order.
+_ROLE_RANK = {Role.ADMIN: 0, Role.MANAGER: 1, Role.ANALYST: 2}
+
+
+def _role_satisfies(actual: Role, minimum: Role) -> bool:
+    return _ROLE_RANK[actual] <= _ROLE_RANK[minimum]
 
 
 def generate_api_key() -> str:
@@ -50,10 +65,10 @@ def require_api_key(
 ) -> ApiKey:
     """FastAPI dependency: require a valid, active API key on the X-API-Key header.
 
-    Applied to event ingestion routes for P1. Dashboard/analytics read routes are
-    intentionally left open in this phase -- gating them requires the User +
-    StoreAccess/RBAC model, which is scoped to P2 so this stays modular rather than
-    a throwaway gate that P2 has to rip out.
+    Applied to event ingestion routes only. Dashboard/analytics read routes use
+    require_user/require_store_role instead (P4.4) -- machine ingestion and human
+    dashboard access are deliberately separate credential systems with separate
+    tables (ApiKey vs. User/StoreAccess), not a shared one.
     """
     if not x_api_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="API key is required.")
@@ -66,3 +81,124 @@ def require_api_key(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="API key is invalid or inactive.")
 
     return api_key
+
+
+# ----------------------------------------------------------------------
+# P4.4: human authentication (User) and store-level authorization
+# (StoreAccess). Separate from the ApiKey system above by design -- see
+# require_api_key's docstring.
+# ----------------------------------------------------------------------
+
+AUTH_TOKEN_TYPE = "bearer"
+
+
+def hash_password(raw_password: str) -> str:
+    """Hash a user-chosen password with bcrypt (a slow hash) -- unlike
+    hash_api_key's SHA-256, passwords are low-entropy secrets a human picked,
+    so a slow, salted hash is the correct tradeoff here."""
+    return bcrypt.hashpw(raw_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(raw_password: str, password_hash: str) -> bool:
+    return bcrypt.checkpw(raw_password.encode("utf-8"), password_hash.encode("utf-8"))
+
+
+def create_user(db: Session, email: str, raw_password: str) -> User:
+    """Create and persist a new User. There is no self-service signup in this
+    phase -- this is called from the offline bootstrap script (see
+    README.md) or, for subsequent users, by an admin operating outside the
+    API. Callers are responsible for committing."""
+    user = User(email=email, password_hash=hash_password(raw_password))
+    db.add(user)
+    db.flush()
+    return user
+
+
+def grant_store_access(db: Session, user_id: str, store_id: str, role: Role) -> StoreAccess:
+    """Create or update a user's role for one store. Idempotent on
+    (user_id, store_id) -- re-granting updates the role rather than raising
+    on the unique constraint, since "change this person's role" and "grant
+    for the first time" are the same operation from the caller's side."""
+    existing = db.execute(
+        select(StoreAccess).where(StoreAccess.user_id == user_id, StoreAccess.store_id == store_id)
+    ).scalar_one_or_none()
+    if existing is not None:
+        existing.role = role
+        db.flush()
+        return existing
+
+    access = StoreAccess(user_id=user_id, store_id=store_id, role=role)
+    db.add(access)
+    db.flush()
+    return access
+
+
+def create_access_token(user_id: str) -> tuple[str, int]:
+    """Issue a signed JWT for a user. Returns (token, expires_in_seconds)."""
+    settings = get_settings()
+    expires_in = settings.jwt_expire_minutes * 60
+    expire_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    payload = {"sub": user_id, "exp": expire_at}
+    token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    return token, expires_in
+
+
+def decode_access_token(token: str) -> str:
+    """Decode and validate a JWT, returning the user id (``sub`` claim).
+    Raises jwt.PyJWTError (expired, malformed, bad signature) on failure --
+    callers translate that to a 401, they don't handle it themselves."""
+    settings = get_settings()
+    payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    return payload["sub"]
+
+
+def require_user(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> User:
+    """FastAPI dependency: require a valid ``Authorization: Bearer <token>``
+    header naming an active user. Applied directly by /auth/me and indirectly
+    by require_store_role for every protected analytics/dashboard route."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token is required.")
+
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        user_id = decode_access_token(token)
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token is invalid or expired.") from None
+
+    user = db.get(User, user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token is invalid or expired.")
+
+    return user
+
+
+def require_store_role(minimum_role: Role):
+    """Dependency factory: require the caller to be an authenticated user
+    with at least ``minimum_role`` access to the ``store_id`` path parameter.
+
+    ANALYST is the floor for every existing analytics route -- any granted
+    role satisfies it. Only the access-grant endpoint requires ADMIN. Role
+    comparison uses the fixed _ROLE_RANK table, not enum declaration order.
+    """
+
+    def dependency(
+        store_id: str,
+        user: User = Depends(require_user),
+        db: Session = Depends(get_db),
+    ) -> StoreAccess:
+        access = db.execute(
+            select(StoreAccess).where(StoreAccess.user_id == user.id, StoreAccess.store_id == store_id)
+        ).scalar_one_or_none()
+
+        if access is None or not _role_satisfies(access.role, minimum_role):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You do not have {minimum_role.value} access to store '{store_id}'.",
+            )
+
+        return access
+
+    return dependency

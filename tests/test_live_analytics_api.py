@@ -19,10 +19,11 @@ from app.api.stores import (
     get_period_comparison,
     get_queue_metrics,
 )
+from app.core.security import create_access_token, create_user, grant_store_access
 from app.db.session import get_db
 from app.main import app
 from app.models import Base
-from app.models.enums import EventType
+from app.models.enums import EventType, Role
 from app.models.event import Event
 from app.models.store import Store
 from app.models.tracking import TrackedEntity, VisitSession
@@ -171,12 +172,27 @@ def test_period_comparison_route(db_session: Session) -> None:
     assert response.previous.footfall == 0
 
 
+def _auth_header(db: Session, store_id: str = "ST_LIVE") -> dict:
+    """P4.4: a bearer token for a user with ANALYST access to the given
+    store, for the client-fixture HTTP tests below."""
+    if db.get(Store, store_id) is None:
+        db.add(Store(id=store_id, name=None))
+    user = create_user(db, email=f"live-analyst-{store_id}@example.com", raw_password="pw")
+    db.commit()
+    grant_store_access(db, user.id, store_id, Role.ANALYST)
+    db.commit()
+    token, _ = create_access_token(user.id)
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_occupancy_history_via_http_returns_200_with_query_params(client: TestClient, db_session: Session) -> None:
     _seed(db_session)
+    headers = _auth_header(db_session)
 
     response = client.get(
         "/stores/ST_LIVE/occupancy/history",
         params={"start": BASE_TIME.isoformat(), "end": (BASE_TIME + timedelta(hours=1)).isoformat(), "bucket_minutes": 30},
+        headers=headers,
     )
 
     assert response.status_code == 200
@@ -187,10 +203,12 @@ def test_occupancy_history_via_http_returns_200_with_query_params(client: TestCl
 
 def test_invalid_range_returns_400_via_http(client: TestClient, db_session: Session) -> None:
     _seed(db_session)
+    headers = _auth_header(db_session)
 
     response = client.get(
         "/stores/ST_LIVE/queue/metrics",
         params={"start": BASE_TIME.isoformat(), "end": BASE_TIME.isoformat()},
+        headers=headers,
     )
 
     assert response.status_code == 400
@@ -199,7 +217,21 @@ def test_invalid_range_returns_400_via_http(client: TestClient, db_session: Sess
 
 def test_missing_required_range_returns_422_via_http(client: TestClient, db_session: Session) -> None:
     _seed(db_session)
+    headers = _auth_header(db_session)
 
-    response = client.get("/stores/ST_LIVE/footfall/hourly")
+    response = client.get("/stores/ST_LIVE/footfall/hourly", headers=headers)
 
     assert response.status_code == 422
+
+
+def test_occupancy_history_via_http_requires_authentication(client: TestClient, db_session: Session) -> None:
+    """P4.4 regression guard: the same route exercised above with a valid
+    token must reject an anonymous request."""
+    _seed(db_session)
+
+    response = client.get(
+        "/stores/ST_LIVE/occupancy/history",
+        params={"start": BASE_TIME.isoformat(), "end": (BASE_TIME + timedelta(hours=1)).isoformat()},
+    )
+
+    assert response.status_code == 401

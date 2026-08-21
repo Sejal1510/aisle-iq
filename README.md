@@ -47,10 +47,19 @@ python -c "from app.db.session import init_db, SessionLocal; from app.core.secur
 
 Save the printed key -- it is hashed at rest and cannot be recovered again. Pass it as the `X-API-Key` header on ingestion requests, including from the `/docs` Swagger UI. This key only authorizes requests for the store it was created for (`ST1001` above) -- submitting an event for a different `store_id`/`store_code` returns 403.
 
-### Current known limitations (as of the P3 update)
+### Creating a bootstrap admin user (P4.4)
+
+Dashboard/analytics read routes require a human user with `StoreAccess` to the store being viewed. There is no self-service signup -- create the first admin user (and grant them access to a store) with a script, the same way the first API key is created above:
+
+```powershell
+python -c "from app.db.session import init_db, SessionLocal; from app.core.security import create_user, grant_store_access; from app.models.store import Store; from app.models.enums import Role; init_db(); db=SessionLocal(); db.merge(Store(id='ST1001')); user = create_user(db, email='admin@aisleiq.local', raw_password='ChangeMe123!'); grant_store_access(db, user.id, 'ST1001', Role.ADMIN); db.commit(); print(user.id)"
+```
+
+Sign in at `http://127.0.0.1:8000/dashboard` with that email/password, or via `POST /auth/login`. An `ADMIN` on a store can grant other existing users access to it with `POST /stores/{store_id}/access` (`{"email": "...", "role": "admin" | "manager" | "analyst"}`) -- that endpoint only grants access to users who already exist; it does not create accounts. Tokens are JWTs (`Authorization: Bearer <token>`), valid for `JWT_EXPIRE_MINUTES` (default 60). `JWT_SECRET_KEY` must be set to a real secret outside `development` -- the app refuses to start otherwise (see `.env.example`).
+
+### Current known limitations (as of the P4.4 update)
 
 - **PostgreSQL is not yet verified.** The Alembic migration and `psycopg[binary]` driver are in place, but nothing has been run against a live PostgreSQL instance yet -- only SQLite, via `tests/test_db_session.py`.
-- **Dashboard/analytics read routes are not authenticated**, including the new P3 endpoints. Only the ingestion routes (`POST /events/`, `POST /events/ingest`) require an API key. Gating read routes needs a User/StoreAccess/RBAC model, which does not exist yet.
 - **No cross-camera identity merging/ReID.** `IdentityAlias` resolution is deterministic and camera-scoped for `track_id`-based identifiers -- the same physical visitor seen on two different cameras resolves to two different `TrackedEntity` rows, by design for this phase.
 - **Near-duplicate ENTRY events can still inflate footfall.** P2's idempotency dedupes *exact* resubmissions (same source id, or an identical synthetic key), but two near-duplicate observations of the same physical entry with even slightly different timestamps (e.g. tracking jitter re-detecting the same crossing a few frames later) are not deduplicated and will both count.
 - **Current metrics are request-computed, not push/streaming real-time.** Every "current"/"live" P3 endpoint runs its query fresh against the database on each request, evaluated as of the latest ingested event (see "What 'current' means" above) -- there is no background job, cache, or WebSocket/SSE push keeping a value updated between requests.
@@ -249,6 +258,8 @@ Implemented for this submission:
 - Deterministic retail insights for queue, zone, conversion, visitor, and revenue recommendations.
 - Customer path analytics for common journeys, purchase journeys, and drop-off paths.
 - Canonical UUID identity with `IdentityAlias`, an `Organization`/`Store`/`Camera`/`Zone` reference model, a `RawEvent` archive, store-scoped idempotency, store-scoped API-key authorization, and Alembic migrations (see the P0-P2 Audit Update above).
+- Trend-aware explainable anomaly detection with grouped alerts and a dashboard "What Changed" summary (P4.3).
+- JWT-authenticated dashboard access with store-level RBAC (`User`/`StoreAccess`, `ADMIN`/`MANAGER`/`ANALYST` roles) gating all analytics/dashboard routes, separate from ingestion's `ApiKey` auth (P4.4).
 
 Roadmap / design-not-fully-implemented items are explicitly treated as future work in the docs:
 
@@ -329,7 +340,6 @@ Remaining limitations:
 
 - Cross-camera ReID is not implemented; it is documented as roadmap because safe stitching needs calibrated topology and confidence modeling.
 - Raw-event replay (the archive itself is implemented) and live PostgreSQL verification (the migration exists but has only run against SQLite) are roadmap items.
-- Dashboard/analytics read routes are not authenticated; only the ingestion routes are, pending a future User/StoreAccess/RBAC model.
 - The dashboard is static and polling-based, suitable for challenge evaluation but not a full production command center.
 
 Known tradeoffs:
@@ -343,8 +353,8 @@ Production roadmap:
 - Verify the Alembic migration against a live PostgreSQL instance and deploy against it (migrations themselves are implemented as of the P2 update above).
 - Add a raw-event replay workflow on top of the existing `RawEvent` archive.
 - Add calibrated camera topology and optional confidence-scored cross-camera identity stitching (ReID) on top of the existing `IdentityAlias` model.
-- Add richer anomaly detection and peak-hour staffing recommendations.
-- Add authenticated dashboard access (ingestion authentication and store-scoped authorization are implemented as of the P0-P2 update above; dashboard/analytics routes remain open pending a future User/StoreAccess/RBAC model), refresh controls, and deployment monitoring.
+- Add richer anomaly detection and peak-hour staffing recommendations (trend-aware explainable anomaly detection is implemented as of P4.3).
+- Add refresh controls and deployment monitoring (JWT-authenticated dashboard access and store-level RBAC are implemented as of the P4.4 update above).
 
 Estimated submission readiness: 96/100.
 

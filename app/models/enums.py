@@ -27,3 +27,8 @@ class ZoneType(str, enum.Enum):
     CHECKOUT = "CHECKOUT"
     ENTRY_DOOR = "ENTRY_DOOR"
     OTHER = "OTHER"
+
+class Role(str, enum.Enum):
+    ADMIN = "admin"
+    MANAGER = "manager"
+    ANALYST = "analyst"

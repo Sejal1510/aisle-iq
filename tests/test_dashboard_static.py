@@ -153,12 +153,14 @@ def test_live_analytics_is_loaded_lazily_on_first_tab_open() -> None:
     assert script.count("ensureLiveAnalyticsLoaded();") == 1
     activate_view_body = script.split("function activateView(viewName) {")[1].split("\n}\n")[0]
     assert "ensureLiveAnalyticsLoaded();" in activate_view_body
-    # Initial page load calls only the existing loadDashboard() -- not
-    # loadLiveAnalytics -- so opening the dashboard without visiting the
-    # Live Analytics tab fires none of its 8 requests. Checked as an
-    # unindented (column-0) statement so this doesn't false-positive on the
-    # indented calls inside the range-control event handler callbacks.
-    assert "\nloadDashboard();\n" in script
+    # P4.4: initial page load is gated behind auth -- showAppShell() (called
+    # once the user is authenticated, either from a stored token or right
+    # after login) calls the existing loadDashboard(), not loadLiveAnalytics,
+    # so opening the dashboard without visiting the Live Analytics tab still
+    # fires none of its 8 requests.
+    show_app_shell_body = script.split("function showAppShell() {")[1].split("\n}\n")[0]
+    assert "loadDashboard();" in show_app_shell_body
+    assert "loadLiveAnalytics();" not in show_app_shell_body
     assert "\nloadLiveAnalytics();\n" not in script
     assert "\nensureLiveAnalyticsLoaded();\n" not in script
 
@@ -339,3 +341,60 @@ def test_p43_does_not_expand_the_8_p3_endpoint_calls() -> None:
         "comparison",
     ]:
         assert script.count(f"/{endpoint}") >= 1
+
+
+def test_p44_hidden_attribute_actually_hides_login_gate_and_app_shell() -> None:
+    """Regression guard: .login-gate/.app-shell's own `display: grid` is an
+    author-stylesheet rule, which beats the browser's built-in
+    `[hidden] { display: none }` rule regardless of specificity (author
+    origin always wins over user-agent origin) -- without an explicit
+    [hidden] override, toggling the `hidden` property in JS silently does
+    nothing and both panels render stacked at once."""
+    styles = (DASHBOARD_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert ".app-shell[hidden]" in styles
+    assert ".login-gate[hidden]" in styles
+    assert "display: none;" in styles.split(".app-shell[hidden]")[1][:200]
+
+
+def test_p44_login_gate_exists_in_html() -> None:
+    html = (DASHBOARD_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="login-gate"' in html
+    assert 'id="login-form"' in html
+    assert 'id="login-email"' in html
+    assert 'id="login-password"' in html
+    assert 'id="app-shell"' in html
+    # The app shell must start hidden -- the login gate is the default view,
+    # not something layered on top of an already-visible dashboard.
+    assert '<div class="app-shell" id="app-shell" hidden>' in html
+
+
+def test_p44_fetchjson_attaches_bearer_token_and_handles_401() -> None:
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    fetch_json_body = script.split("async function fetchJson(path) {")[1].split("\n}\n")[0]
+    assert "state.authToken" in fetch_json_body
+    assert "Authorization" in fetch_json_body
+    assert "Bearer" in fetch_json_body
+    assert "401" in fetch_json_body
+    assert "showLoginGate" in fetch_json_body
+
+
+def test_p44_login_form_submits_credentials_and_stores_token() -> None:
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert 'elements.loginForm.addEventListener("submit"' in script
+    assert '"/auth/login"' in script
+    # sessionStorage, not localStorage -- a token should not outlive the
+    # browser tab/session it was issued in.
+    assert "sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY" in script
+
+
+def test_p44_logout_clears_token_and_shows_login_gate() -> None:
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert 'elements.logoutButton.addEventListener("click"' in script
+    show_login_gate_body = script.split("function showLoginGate() {")[1].split("\n}\n")[0]
+    assert "sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)" in show_login_gate_body
+    assert "state.authToken = null" in show_login_gate_body

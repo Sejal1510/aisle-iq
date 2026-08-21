@@ -1,6 +1,11 @@
+const AUTH_TOKEN_STORAGE_KEY = "aisleiq_token";
+
 const state = {
   storeId: "ST1001",
   comparisonStores: ["ST1001", "ST1002"],
+  // P4.4: kept in sessionStorage (not localStorage) so a token doesn't
+  // outlive the browser tab/session it was issued in.
+  authToken: sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY),
   metrics: null,
   funnel: null,
   heatmap: null,
@@ -22,6 +27,13 @@ const RANGE_PRESET_LABELS = {
 };
 
 const elements = {
+  loginGate: document.querySelector("#login-gate"),
+  loginForm: document.querySelector("#login-form"),
+  loginEmail: document.querySelector("#login-email"),
+  loginPassword: document.querySelector("#login-password"),
+  loginError: document.querySelector("#login-error"),
+  appShell: document.querySelector("#app-shell"),
+  logoutButton: document.querySelector("#logout-button"),
   pageTitle: document.querySelector("#page-title"),
   storeForm: document.querySelector("#store-form"),
   storeInput: document.querySelector("#store-id"),
@@ -125,7 +137,55 @@ elements.rangeApply.addEventListener("click", () => {
   loadLiveAnalytics();
 });
 
-loadDashboard();
+elements.loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  elements.loginError.hidden = true;
+  try {
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: elements.loginEmail.value.trim(),
+        password: elements.loginPassword.value,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error("Invalid email or password.");
+    }
+    const body = await response.json();
+    state.authToken = body.access_token;
+    sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, state.authToken);
+    elements.loginPassword.value = "";
+    showAppShell();
+  } catch (error) {
+    elements.loginError.hidden = false;
+    elements.loginError.textContent = error.message;
+  }
+});
+
+elements.logoutButton.addEventListener("click", () => {
+  showLoginGate();
+});
+
+function showLoginGate() {
+  state.authToken = null;
+  sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  elements.appShell.hidden = true;
+  elements.loginGate.hidden = false;
+}
+
+function showAppShell() {
+  elements.loginGate.hidden = true;
+  elements.appShell.hidden = false;
+  loadDashboard();
+  refreshLiveAnalyticsIfLoaded();
+}
+
+if (state.authToken) {
+  showAppShell();
+} else {
+  showLoginGate();
+}
 
 async function loadDashboard() {
   setStatus("");
@@ -155,7 +215,17 @@ async function loadDashboard() {
 }
 
 async function fetchJson(path) {
-  const response = await fetch(path, { headers: { Accept: "application/json" } });
+  const headers = { Accept: "application/json" };
+  if (state.authToken) {
+    headers.Authorization = `Bearer ${state.authToken}`;
+  }
+  const response = await fetch(path, { headers });
+  if (response.status === 401) {
+    // Token missing/expired/invalid -- drop it and show the login gate
+    // instead of surfacing a raw fetch error through every panel.
+    showLoginGate();
+    throw new Error("Session expired. Please sign in again.");
+  }
   if (!response.ok) {
     throw new Error(`Unable to load ${path}: ${response.status}`);
   }

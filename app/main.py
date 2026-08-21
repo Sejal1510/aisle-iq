@@ -16,6 +16,7 @@ from structlog.contextvars import bind_contextvars, clear_contextvars
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.db.session import SessionLocal, init_db
+from app.api import auth as auth_module
 from app.api import events as events_module
 from app.api import stores as stores_module
 from app.models.event import Event
@@ -66,6 +67,15 @@ app.include_router(
 app.include_router(
     stores_module.router,
     tags=["stores"]
+)
+app.include_router(
+    auth_module.router,
+    prefix="/api/v1",
+    tags=["auth"]
+)
+app.include_router(
+    auth_module.router,
+    tags=["auth"]
 )
 app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
 

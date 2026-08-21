@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.main as main_module
-from app.core.security import create_api_key
+from app.core.security import create_access_token, create_api_key, create_user, grant_store_access
 from app.db.session import get_db
 from app.main import app
 from app.models import Base
+from app.models.enums import Role
 from app.models.store import Store
 from app.services.event_ingestion_service import EventIngestionService
 
@@ -76,6 +77,23 @@ def store_api_key(db_session: Session) -> str:
     _row, raw_key = create_api_key(db_session, "ST_HTTP")
     db_session.commit()
     return raw_key
+
+
+@pytest.fixture()
+def store_auth_header(db_session: Session) -> dict:
+    """P4.4: a bearer token for a user with ANALYST access to ST_HTTP, for
+    the analytics routes that now require it. Does not overlap with
+    store_api_key's Store row -- both fixtures ensure ST_HTTP exists via a
+    plain INSERT-if-absent, since either fixture may run first depending on
+    which test requests it."""
+    if db_session.get(Store, "ST_HTTP") is None:
+        db_session.add(Store(id="ST_HTTP", name=None))
+    user = create_user(db_session, email="http-analyst@example.com", raw_password="pw")
+    db_session.commit()
+    grant_store_access(db_session, user.id, "ST_HTTP", Role.ANALYST)
+    db_session.commit()
+    token, _ = create_access_token(user.id)
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _entry_payload(event_id: str = "evt-http-1") -> dict:
@@ -214,10 +232,10 @@ def test_single_event_unexpected_error_returns_500_without_leaking_internals(
     assert "RuntimeError" not in str(body)
 
 
-def test_metrics_endpoint_via_http(client: TestClient, store_api_key: str) -> None:
+def test_metrics_endpoint_via_http(client: TestClient, store_api_key: str, store_auth_header: dict) -> None:
     client.post("/events/", json=_entry_payload("evt-http-metrics"), headers={"X-API-Key": store_api_key})
 
-    response = client.get("/stores/ST_HTTP/metrics")
+    response = client.get("/stores/ST_HTTP/metrics", headers=store_auth_header)
 
     assert response.status_code == 200
     body = response.json()
@@ -226,13 +244,24 @@ def test_metrics_endpoint_via_http(client: TestClient, store_api_key: str) -> No
     assert "conversion_rate" in body
 
 
-def test_funnel_endpoint_via_http(client: TestClient) -> None:
-    response = client.get("/stores/ST_HTTP/funnel")
+def test_funnel_endpoint_via_http(client: TestClient, store_auth_header: dict) -> None:
+    response = client.get("/stores/ST_HTTP/funnel", headers=store_auth_header)
 
     assert response.status_code == 200
     body = response.json()
     assert body["store_id"] == "ST_HTTP"
     assert [step["step"] for step in body["steps"]] == ["visitors", "queue_join", "queue_complete", "purchase"]
+
+
+def test_metrics_endpoint_via_http_requires_authentication(client: TestClient, db_session: Session) -> None:
+    """P4.4 regression guard: the same route that test_metrics_endpoint_via_http
+    exercises with a valid token must reject an anonymous request."""
+    db_session.add(Store(id="ST_HTTP", name=None))
+    db_session.commit()
+
+    response = client.get("/stores/ST_HTTP/metrics")
+
+    assert response.status_code == 401
 
 
 def test_health_endpoint_via_http(client: TestClient) -> None:

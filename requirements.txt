@@ -11,6 +11,10 @@ psycopg[binary]  # PostgreSQL driver; only imported/connected to when DATABASE_U
 pydantic
 pydantic-settings
 
+# Authentication (P4.4)
+pyjwt
+bcrypt
+
 # Logging
 structlog
 
