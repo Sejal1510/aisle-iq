@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -145,4 +145,4 @@ class QueueService:
         latest = self.db.scalar(select(func.max(Event.timestamp)).where(Event.store_id == store_id))
         if latest is not None:
             return latest
-        return datetime.now(timezone.utc).replace(tzinfo=None)
+        return datetime.now(UTC).replace(tzinfo=None)

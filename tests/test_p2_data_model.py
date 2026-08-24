@@ -23,7 +23,10 @@ from app.models.tracking import STORE_SCOPED_CAMERA_ID, IdentityAlias, TrackedEn
 from app.schemas.event import EventPayload
 from app.services.event_ingestion_service import EventIngestionService
 from app.services.pos_ingestion_service import PosIngestionService
-from app.services.reference_data_service import DEFAULT_ORGANIZATION_ID, ReferenceDataService
+from app.services.reference_data_service import (
+    DEFAULT_ORGANIZATION_ID,
+    ReferenceDataService,
+)
 
 
 @pytest.fixture()

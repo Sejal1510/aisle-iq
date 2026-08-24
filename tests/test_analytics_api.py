@@ -1,15 +1,22 @@
 # PROMPT: Generate API tests for store analytics endpoints, route registration, and operational anomaly responses.
 # CHANGES MADE: Kept direct route-function tests, seeded deterministic analytics data, and added anomaly/route assertions.
-import pytest
-from sqlalchemy.exc import OperationalError
 import asyncio
 from types import SimpleNamespace
+
+import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api.stores import get_store_anomalies, get_store_funnel, get_store_insights, get_store_metrics, get_store_paths
-from app.main import app, health_check, structured_request_logging
 import app.main as main_module
+from app.api.stores import (
+    get_store_anomalies,
+    get_store_funnel,
+    get_store_insights,
+    get_store_metrics,
+    get_store_paths,
+)
+from app.main import app, health_check, structured_request_logging
 from app.models import Base
 from tests.test_analytics_service import seed_analytics_data
 

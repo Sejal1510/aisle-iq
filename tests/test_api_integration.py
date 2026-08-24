@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.main as main_module
-from app.core.security import create_access_token, create_api_key, create_user, grant_store_access
+from app.core.security import (
+    create_access_token,
+    create_api_key,
+    create_user,
+    grant_store_access,
+)
 from app.db.session import get_db
 from app.main import app
 from app.models import Base

@@ -1,4 +1,5 @@
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Dev-only placeholder. Never a valid secret outside development -- Settings
@@ -21,7 +22,7 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     """Returns a cached singleton instance of the settings."""
     settings = Settings()

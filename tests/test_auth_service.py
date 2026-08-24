@@ -1,7 +1,7 @@
 # P4.4: unit coverage for password hashing, JWT issuing/validation, and the
 # require_user / require_store_role dependencies, called directly the same
 # way tests/test_analytics_api.py calls route functions directly.
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
@@ -59,7 +59,7 @@ def test_create_access_token_round_trip() -> None:
 
 def test_decode_access_token_rejects_expired_token() -> None:
     settings = get_settings()
-    expired_payload = {"sub": "user-123", "exp": datetime.now(timezone.utc) - timedelta(seconds=1)}
+    expired_payload = {"sub": "user-123", "exp": datetime.now(UTC) - timedelta(seconds=1)}
     expired_token = jwt.encode(expired_payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
     with pytest.raises(jwt.ExpiredSignatureError):

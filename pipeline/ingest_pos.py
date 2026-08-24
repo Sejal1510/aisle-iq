@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal, init_db
 from app.services.pos_ingestion_service import PosIngestionService
 
-
 DEFAULT_POS_PATH = pathlib.Path(__file__).parent.parent / "data" / "POS - sample transactionsb1e826f (1).csv"
 
 logger = structlog.get_logger(__name__)

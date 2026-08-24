@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import json
-from typing import Iterable
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session

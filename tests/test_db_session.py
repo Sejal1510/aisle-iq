@@ -4,13 +4,12 @@
 from pathlib import Path
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
 import app.db.session as session_module
+from alembic import command
 from app.models import Base
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 

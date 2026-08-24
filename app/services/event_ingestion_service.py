@@ -1,17 +1,25 @@
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import Optional
 
-from sqlalchemy.orm import Session
-from sqlalchemy import select
 import structlog
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from app.models.enums import EventType, SessionStatus
+from app.models.event import Event
+from app.models.raw_event import RawEvent
+from app.models.tracking import (
+    STORE_SCOPED_CAMERA_ID,
+    IdentityAlias,
+    TrackedEntity,
+    VisitSession,
+)
 from app.schemas.event import (
     CanonicalEvent,
     CanonicalEventType,
-    EventPayload,
     EntryEvent,
+    EventPayload,
     ExitEvent,
     QueueAbandonedEvent,
     QueueCompletedEvent,
@@ -19,10 +27,6 @@ from app.schemas.event import (
     ZoneEnteredEvent,
     ZoneExitedEvent,
 )
-from app.models.tracking import IdentityAlias, STORE_SCOPED_CAMERA_ID, TrackedEntity, VisitSession
-from app.models.event import Event
-from app.models.raw_event import RawEvent
-from app.models.enums import EventType, SessionStatus
 from app.services.reference_data_service import ReferenceDataService
 from app.services.visitor_inference_service import VisitorInferenceService
 
@@ -308,12 +312,12 @@ class EventIngestionService:
         source_value: str,
         camera_scoped: bool,
         timestamp: datetime,
-        gender: Optional[str],
-        age: Optional[int],
-        age_bucket: Optional[str],
+        gender: str | None,
+        age: int | None,
+        age_bucket: str | None,
         is_staff: bool,
-        group_id: Optional[str],
-        group_size: Optional[int],
+        group_id: str | None,
+        group_size: int | None,
     ) -> TrackedEntity:
         """Resolve a raw source identifier to a canonical TrackedEntity via
         IdentityAlias, creating both the first time this (store, camera scope,
@@ -376,7 +380,7 @@ class EventIngestionService:
         self.db.flush()
         return entity
 
-    def _record_raw_event(self, payload: EventPayload, *, event_id: Optional[str], validation_status: str) -> None:
+    def _record_raw_event(self, payload: EventPayload, *, event_id: str | None, validation_status: str) -> None:
         self.db.add(
             RawEvent(
                 source=type(payload).__name__,
@@ -434,7 +438,7 @@ def _parse_datetime(value):
     return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
 
 
-def _yes_no_to_bool(value: Optional[str]) -> Optional[bool]:
+def _yes_no_to_bool(value: str | None) -> bool | None:
     if value is None:
         return None
     return value == "Yes"

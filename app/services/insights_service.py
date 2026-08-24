@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.schemas.analytics import StoreFunnelResponse, StoreMetricsResponse, ZoneDwellMetric
+from app.schemas.analytics import (
+    StoreFunnelResponse,
+    StoreMetricsResponse,
+    ZoneDwellMetric,
+)
 from app.schemas.insights import StoreInsight, StoreInsightsResponse
 from app.services.analytics_service import AnalyticsService
-
 
 SEVERITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 

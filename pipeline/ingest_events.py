@@ -21,11 +21,10 @@ import json
 import pathlib
 import sys
 import time
-from typing import Optional, Tuple
 
 import structlog
-from sqlalchemy.orm import Session
 from pydantic import TypeAdapter
+from sqlalchemy.orm import Session
 
 # Project imports – reuse the same code path as the FastAPI endpoint
 from app.db.session import SessionLocal, init_db
@@ -46,7 +45,7 @@ logger = structlog.get_logger(__name__)
 _event_adapter = TypeAdapter(EventPayload)
 
 
-def _process_line(line: str, service: EventIngestionService) -> Tuple[bool, str, Optional[str]]:
+def _process_line(line: str, service: EventIngestionService) -> tuple[bool, str, str | None]:
     """
     Parse a single JSON line and hand it to the service.
 

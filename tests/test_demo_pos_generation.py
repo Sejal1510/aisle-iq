@@ -19,7 +19,6 @@ from app.services.correlation_service import CorrelationService
 from app.services.pos_ingestion_service import PosIngestionService
 from pipeline.generate_demo_pos import generate_demo_pos
 
-
 POS_SAMPLE_PATH = Path(__file__).parent / "fixtures" / "pos_sample.csv"
 
 

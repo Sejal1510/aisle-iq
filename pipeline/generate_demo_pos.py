@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,7 +15,6 @@ from app.db.session import SessionLocal, init_db
 from app.models.enums import EventType, SessionStatus
 from app.models.event import Event
 from app.models.tracking import TrackedEntity, VisitSession
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "data" / "demo_pos_st1001_st1002.csv"

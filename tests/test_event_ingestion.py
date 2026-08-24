@@ -9,14 +9,19 @@ from pydantic import TypeAdapter
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api.events import ingest_events
 from app.core.security import create_api_key
 from app.models import Base
 from app.models.auth import ApiKey
 from app.models.enums import EventType, SessionStatus
 from app.models.event import Event
 from app.models.store import Store
-from app.models.tracking import STORE_SCOPED_CAMERA_ID, IdentityAlias, TrackedEntity, VisitSession
-from app.api.events import ingest_events
+from app.models.tracking import (
+    STORE_SCOPED_CAMERA_ID,
+    IdentityAlias,
+    TrackedEntity,
+    VisitSession,
+)
 from app.schemas.event import (
     EventPayload,
     QueueAbandonedEvent,
@@ -24,10 +29,9 @@ from app.schemas.event import (
     ZoneEnteredEvent,
     ZoneExitedEvent,
 )
-from app.services.event_ingestion_service import EventIngestionService
 from app.services.analytics_service import AnalyticsService
+from app.services.event_ingestion_service import EventIngestionService
 from app.services.visitor_inference_service import VisitorInferenceService
-
 
 SAMPLE_EVENTS_PATH = Path(__file__).parent / "fixtures" / "sample_events.jsonl"
 

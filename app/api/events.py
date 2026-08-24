@@ -1,18 +1,18 @@
-from typing import Any, Optional
+from typing import Any
 
-from fastapi import APIRouter, Depends, status, HTTPException
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-import structlog
 from structlog.contextvars import get_contextvars
 
 from app.core.security import require_api_key
-from app.models.auth import ApiKey
-from app.schemas.event import EventPayload
 from app.db.session import get_db
+from app.models.auth import ApiKey
 from app.models.event import Event
+from app.schemas.event import EventPayload
 from app.services.event_ingestion_service import EventIngestionService
 from app.services.visitor_inference_service import VisitorInferenceService
 
@@ -30,7 +30,7 @@ def _error_body(error: str, message: str, details: list | None = None) -> dict:
     }
 
 
-def _extract_store_id(raw_event: Any) -> Optional[str]:
+def _extract_store_id(raw_event: Any) -> str | None:
     """Best-effort store id extraction from a not-yet-validated raw payload --
     used for the pre-validation authorization and idempotency-pre-check steps,
     which both need to know the store before (or without) fully parsing the

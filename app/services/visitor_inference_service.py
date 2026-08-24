@@ -11,7 +11,6 @@ from app.models.enums import EventType
 from app.models.event import Event
 from app.models.tracking import TrackedEntity, VisitSession
 
-
 STAFF_ZONE_KEYWORDS = ("staff", "boh", "back", "office", "stock", "storage", "employee")
 BILLING_ZONE_KEYWORDS = ("billing", "cash", "checkout", "queue", "counter")
 

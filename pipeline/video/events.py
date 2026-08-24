@@ -4,7 +4,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import uuid4
 
-from pipeline.video.config import CameraRole, EntryLine, Point, PolygonZone, VideoProcessingConfig
+from pipeline.video.config import (
+    CameraRole,
+    EntryLine,
+    Point,
+    PolygonZone,
+    VideoProcessingConfig,
+)
 from pipeline.video.tracking import TrackSnapshot
 
 

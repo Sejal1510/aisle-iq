@@ -1,5 +1,6 @@
 import enum
 
+
 class EventType(str, enum.Enum):
     ENTRY = "entry"
     EXIT = "exit"

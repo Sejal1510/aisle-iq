@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from sqlalchemy.orm import Session
 
 from app.models.enums import ZoneType
 from app.models.store import Camera, Organization, Store, Zone
-
 
 DEFAULT_ORGANIZATION_ID = "default"
 DEFAULT_ORGANIZATION_NAME = "Default Organization"
@@ -46,7 +43,7 @@ class ReferenceDataService:
             self.db.flush()
         return store
 
-    def ensure_camera(self, store_id: str, camera_id: Optional[str], *, role: Optional[str] = None) -> Optional[Camera]:
+    def ensure_camera(self, store_id: str, camera_id: str | None, *, role: str | None = None) -> Camera | None:
         if camera_id is None:
             return None
         camera = self.db.get(Camera, camera_id)
@@ -60,12 +57,12 @@ class ReferenceDataService:
     def ensure_zone(
         self,
         store_id: str,
-        zone_id: Optional[str],
+        zone_id: str | None,
         *,
-        name: Optional[str] = None,
-        zone_type: Optional[str] = None,
-        is_revenue_zone: Optional[bool] = None,
-    ) -> Optional[Zone]:
+        name: str | None = None,
+        zone_type: str | None = None,
+        is_revenue_zone: bool | None = None,
+    ) -> Zone | None:
         if zone_id is None:
             return None
         zone = self.db.get(Zone, zone_id)
@@ -83,7 +80,7 @@ class ReferenceDataService:
         return zone
 
 
-def _parse_zone_type(value: Optional[str]) -> ZoneType:
+def _parse_zone_type(value: str | None) -> ZoneType:
     if value is None:
         return ZoneType.OTHER
     try:
