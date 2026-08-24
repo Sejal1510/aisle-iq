@@ -11,7 +11,6 @@ from pipeline.video.config import default_video_configs
 from pipeline.video.events import VideoEventGenerator
 from pipeline.video.tracking import UltralyticsByteTracker, read_video_metadata
 
-
 logger = structlog.get_logger(__name__)
 
 

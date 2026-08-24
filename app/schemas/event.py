@@ -6,10 +6,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal, Optional, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing_extensions import Annotated
+
 
 # ----------------------------------------------------------------------
 # 1️⃣ Event type discriminators (match the JSON “event_type” field)
@@ -40,9 +40,9 @@ class CanonicalEventType(str, Enum):
 
 class BaseEvent(BaseModel):
     model_config = ConfigDict(coerce_numbers_to_str=True)
-    event_id: Optional[str] = None
-    confidence: Optional[float] = None
-    metadata: Optional[dict[str, Any]] = None
+    event_id: str | None = None
+    confidence: float | None = None
+    metadata: dict[str, Any] | None = None
 
 # ----------------------------------------------------------------------
 # 2️⃣ Concrete request bodies – one model per possible payload.
@@ -54,13 +54,13 @@ class EntryEvent(BaseEvent):
     camera_id: str
     event_timestamp: datetime
     # optional demographic fields
-    is_staff: Optional[bool] = False
-    gender_pred: Optional[str] = None
-    age_pred: Optional[int] = None
-    age_bucket: Optional[str] = None
-    is_face_hidden: Optional[bool] = False
-    group_id: Optional[str] = None
-    group_size: Optional[int] = None
+    is_staff: bool | None = False
+    gender_pred: str | None = None
+    age_pred: int | None = None
+    age_bucket: str | None = None
+    is_face_hidden: bool | None = False
+    group_id: str | None = None
+    group_size: int | None = None
 
 class ExitEvent(BaseEvent):
     event_type: Literal[EventType.EXIT] = Field(default=EventType.EXIT)
@@ -68,27 +68,27 @@ class ExitEvent(BaseEvent):
     store_code: str
     camera_id: str
     event_timestamp: datetime
-    is_staff: Optional[bool] = False
-    gender_pred: Optional[str] = None
-    age_pred: Optional[int] = None
-    age_bucket: Optional[str] = None
-    is_face_hidden: Optional[bool] = False
-    group_id: Optional[str] = None
-    group_size: Optional[int] = None
+    is_staff: bool | None = False
+    gender_pred: str | None = None
+    age_pred: int | None = None
+    age_bucket: str | None = None
+    is_face_hidden: bool | None = False
+    group_id: str | None = None
+    group_size: int | None = None
 
 class ZoneEventBase(BaseEvent):
     track_id: str
     store_id: str
     camera_id: str
     zone_id: str
-    zone_name: Optional[str] = None
-    zone_type: Optional[str] = None
-    is_revenue_zone: Optional[str] = None
-    zone_hotspot_x: Optional[float] = None
-    zone_hotspot_y: Optional[float] = None
-    gender: Optional[str] = None
-    age: Optional[int] = None
-    age_bucket: Optional[str] = None
+    zone_name: str | None = None
+    zone_type: str | None = None
+    is_revenue_zone: str | None = None
+    zone_hotspot_x: float | None = None
+    zone_hotspot_y: float | None = None
+    gender: str | None = None
+    age: int | None = None
+    age_bucket: str | None = None
 
     @field_validator("track_id", mode="before")
     @classmethod
@@ -110,12 +110,12 @@ class ZoneExitedEvent(ZoneEventBase):
 
 class QueueEventBase(ZoneEventBase):
     queue_event_id: str
-    zone_type: Optional[str] = None
+    zone_type: str | None = None
     queue_join_ts: datetime
-    queue_served_ts: Optional[datetime] = None
+    queue_served_ts: datetime | None = None
     queue_exit_ts: datetime
-    wait_seconds: Optional[int] = None
-    queue_position_at_join: Optional[int] = None
+    wait_seconds: int | None = None
+    queue_position_at_join: int | None = None
     abandoned: bool
 
 
@@ -150,8 +150,8 @@ class CanonicalEvent(BaseEvent):
         CanonicalEventType.REENTRY,
     ]
     timestamp: datetime
-    zone_id: Optional[str] = None
-    dwell_ms: Optional[int] = 0
+    zone_id: str | None = None
+    dwell_ms: int | None = 0
     is_staff: bool = False
     confidence: float = Field(ge=0.0, le=1.0)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -161,16 +161,7 @@ class CanonicalEvent(BaseEvent):
 #    model based on the "event_type" field.
 # ----------------------------------------------------------------------
 EventPayload = Annotated[
-    Union[
-        EntryEvent,
-        ExitEvent,
-        ReentryEvent,
-        ZoneEnteredEvent,
-        ZoneExitedEvent,
-        QueueCompletedEvent,
-        QueueAbandonedEvent,
-        CanonicalEvent,
-    ],
+    EntryEvent | ExitEvent | ReentryEvent | ZoneEnteredEvent | ZoneExitedEvent | QueueCompletedEvent | QueueAbandonedEvent | CanonicalEvent,
     Field(discriminator="event_type"),
 ]
 

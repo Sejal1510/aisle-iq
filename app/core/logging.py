@@ -1,16 +1,18 @@
 import logging
 import sys
+
 import structlog
+
 
 def setup_logging(environment: str, debug: bool) -> None:
     """Configure structured logging using structlog."""
-    
+
     # Set the standard logging level based on debug mode
     log_level = logging.DEBUG if debug else logging.INFO
 
     # Clear existing handlers to prevent duplicate logs
     logging.getLogger().handlers.clear()
-    
+
     # Configure standard library logging wrapper
     logging.basicConfig(
         format="%(message)s",

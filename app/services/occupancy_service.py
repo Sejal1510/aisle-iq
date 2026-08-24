@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -21,7 +21,7 @@ def to_naive(value: datetime) -> datetime:
     converted to UTC before the tzinfo is dropped, rather than dropped as-is
     (which would silently reinterpret it in the wrong offset)."""
     if value.tzinfo is not None:
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.astimezone(UTC).replace(tzinfo=None)
     return value
 
 
@@ -159,4 +159,4 @@ class OccupancyService:
         latest = self.db.scalar(select(func.max(Event.timestamp)).where(Event.store_id == store_id))
         if latest is not None:
             return latest
-        return datetime.now(timezone.utc).replace(tzinfo=None)
+        return datetime.now(UTC).replace(tzinfo=None)

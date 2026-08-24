@@ -11,7 +11,6 @@ from app.models.event import Event
 from app.models.tracking import VisitSession
 from app.schemas.analytics import HeatmapPoint, StoreHeatmapResponse
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 STORE_LAYOUTS = {

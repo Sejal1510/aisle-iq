@@ -1,24 +1,24 @@
-from contextlib import asynccontextmanager
 import json
 import re
 import time
+from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import uuid4
 
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
-import structlog
 from structlog.contextvars import bind_contextvars, clear_contextvars
 
-from app.core.config import get_settings
-from app.core.logging import setup_logging
-from app.db.session import SessionLocal, init_db
 from app.api import auth as auth_module
 from app.api import events as events_module
 from app.api import stores as stores_module
+from app.core.config import get_settings
+from app.core.logging import setup_logging
+from app.db.session import SessionLocal, init_db
 from app.models.event import Event
 
 settings = get_settings()
@@ -30,15 +30,15 @@ async def lifespan(app: FastAPI):
     setup_logging(environment=settings.environment, debug=settings.debug)
     logger = structlog.get_logger()
     logger.info(
-        "application_startup", 
-        app_name=settings.app_name, 
-        environment=settings.environment, 
+        "application_startup",
+        app_name=settings.app_name,
+        environment=settings.environment,
         debug=settings.debug
     )
-    
+
     # Initialize the database tables on startup
     init_db()
-    
+
     yield
     logger.info("application_shutdown")
 

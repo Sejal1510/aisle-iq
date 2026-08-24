@@ -13,7 +13,6 @@ from app.models.store import Store
 from app.schemas.pos import PosRow
 from app.services.pos_ingestion_service import PosIngestionService
 
-
 POS_SAMPLE_PATH = Path(__file__).parent / "fixtures" / "pos_sample.csv"
 
 

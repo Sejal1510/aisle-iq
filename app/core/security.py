@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
@@ -137,7 +137,7 @@ def create_access_token(user_id: str) -> tuple[str, int]:
     """Issue a signed JWT for a user. Returns (token, expires_in_seconds)."""
     settings = get_settings()
     expires_in = settings.jwt_expire_minutes * 60
-    expire_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    expire_at = datetime.now(UTC) + timedelta(seconds=expires_in)
     payload = {"sub": user_id, "exp": expire_at}
     token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     return token, expires_in

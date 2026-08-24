@@ -5,11 +5,16 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from pipeline.video.config import CameraRole, EntryLine, Point, PolygonZone, VideoProcessingConfig
+from pipeline.video.config import (
+    CameraRole,
+    EntryLine,
+    Point,
+    PolygonZone,
+    VideoProcessingConfig,
+)
 from pipeline.video.events import VideoEventGenerator
 from pipeline.video.process_videos import write_jsonl_event
 from pipeline.video.tracking import TrackSnapshot
-
 
 BASE_TIME = datetime(2026, 6, 1, 10, 0, 0)
 

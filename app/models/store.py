@@ -1,7 +1,7 @@
-from typing import List, Optional
-from sqlalchemy import String, Boolean, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
+
+from sqlalchemy import Boolean, ForeignKey, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from app.db.base import Base
@@ -22,7 +22,7 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(default=func.now())
 
-    stores: Mapped[List["Store"]] = relationship(back_populates="organization")
+    stores: Mapped[list["Store"]] = relationship(back_populates="organization")
 
 
 class Store(Base):
@@ -37,14 +37,14 @@ class Store(Base):
     __tablename__ = "store"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    organization_id: Mapped[Optional[str]] = mapped_column(ForeignKey("organization.id"), index=True)
-    name: Mapped[Optional[str]] = mapped_column(String)
+    organization_id: Mapped[str | None] = mapped_column(ForeignKey("organization.id"), index=True)
+    name: Mapped[str | None] = mapped_column(String)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(default=func.now())
 
     organization: Mapped["Organization"] = relationship(back_populates="stores")
-    cameras: Mapped[List["Camera"]] = relationship(back_populates="store", cascade="all, delete-orphan")
-    zones: Mapped[List["Zone"]] = relationship(back_populates="store", cascade="all, delete-orphan")
+    cameras: Mapped[list["Camera"]] = relationship(back_populates="store", cascade="all, delete-orphan")
+    zones: Mapped[list["Zone"]] = relationship(back_populates="store", cascade="all, delete-orphan")
 
 
 class Camera(Base):
@@ -52,8 +52,8 @@ class Camera(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     store_id: Mapped[str] = mapped_column(ForeignKey("store.id"), index=True)
-    name: Mapped[Optional[str]] = mapped_column(String)
-    role: Mapped[Optional[str]] = mapped_column(String)
+    name: Mapped[str | None] = mapped_column(String)
+    role: Mapped[str | None] = mapped_column(String)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(default=func.now())
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -148,7 +148,7 @@ class AnomalyService:
         ]
 
     def _dead_zone(self, store_id: str) -> list[StoreAnomaly]:
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=30)
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=30)
         visited_zone_ids = set(
             self.db.scalars(
                 select(Event.zone_id)

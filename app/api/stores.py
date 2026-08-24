@@ -46,6 +46,7 @@ router = APIRouter()
 # MANAGER, ANALYST) satisfies it. Only the access-grant endpoint itself
 # requires ADMIN. See app.core.security.require_store_role.
 _read_access = Depends(require_store_role(Role.ANALYST))
+_admin_access = Depends(require_store_role(Role.ADMIN))
 
 
 def _run_ranged(callable_) -> object:
@@ -235,7 +236,7 @@ def grant_access(
     store_id: str,
     payload: StoreAccessGrantRequest,
     db: Session = Depends(get_db),
-    admin_access: StoreAccess = Depends(require_store_role(Role.ADMIN)),
+    admin_access: StoreAccess = _admin_access,
 ) -> StoreAccessGrantResponse:
     """Grant (or update) an existing user's role for this store. ADMIN-only.
     Does not create users -- there is no self-service signup in this phase;

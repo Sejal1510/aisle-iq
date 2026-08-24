@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterator
 
 from pipeline.video.config import VideoProcessingConfig
 

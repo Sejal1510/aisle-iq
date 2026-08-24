@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-import re
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -14,7 +13,7 @@ class PosRow(BaseModel):
     order_time: str = Field(min_length=1)
     store_id: str = Field(min_length=1)
     product_id: str = Field(min_length=1)
-    brand_name: Optional[str] = None
+    brand_name: str | None = None
     total_amount: float
     timestamp: datetime | None = None
 
@@ -54,7 +53,7 @@ class PosRow(BaseModel):
         return float(amount)
 
     @model_validator(mode="after")
-    def parse_timestamp(self) -> "PosRow":
+    def parse_timestamp(self) -> PosRow:
         try:
             self.timestamp = datetime.strptime(
                 f"{self.order_date} {self.order_time}",

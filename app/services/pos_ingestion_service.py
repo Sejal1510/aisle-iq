@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Iterable
+from collections.abc import Iterable
 
+import structlog
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-import structlog
 
 from app.models.pos import PosTransaction, PosTransactionItem
 from app.schemas.pos import PosImportResult, PosRow
 from app.services.reference_data_service import ReferenceDataService
-
 
 logger = structlog.get_logger(__name__)
 
