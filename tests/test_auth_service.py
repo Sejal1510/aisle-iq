@@ -1,6 +1,7 @@
 # P4.4: unit coverage for password hashing, JWT issuing/validation, and the
 # require_user / require_store_role dependencies, called directly the same
 # way tests/test_analytics_api.py calls route functions directly.
+import base64
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -68,7 +69,17 @@ def test_decode_access_token_rejects_expired_token() -> None:
 
 def test_decode_access_token_rejects_bad_signature() -> None:
     token, _ = create_access_token("user-123")
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    header, payload, signature = token.rsplit(".", 2)
+
+    # Flip a bit in the *decoded* signature bytes rather than a trailing
+    # base64 character: a JWT's base64url signature segment ends with
+    # always-zero padding bits, so tampering the last character can --
+    # rarely, but deterministically reproducibly -- decode back to the same
+    # underlying bytes and leave the signature valid, making this test flaky.
+    sig_bytes = bytearray(base64.urlsafe_b64decode(signature + "=="))
+    sig_bytes[0] ^= 0xFF
+    tampered_signature = base64.urlsafe_b64encode(bytes(sig_bytes)).rstrip(b"=").decode()
+    tampered = f"{header}.{payload}.{tampered_signature}"
 
     with pytest.raises(jwt.PyJWTError):
         decode_access_token(tampered)
