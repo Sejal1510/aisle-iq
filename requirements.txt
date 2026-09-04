@@ -1,6 +1,7 @@
 # Web Framework
 fastapi
 uvicorn[standard]
+python-multipart  # required by FastAPI's UploadFile (P7 onboarding: map/camera-image uploads); no transitive deps
 
 # Database
 sqlalchemy

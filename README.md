@@ -65,6 +65,20 @@ Sign in at `http://127.0.0.1:8000/dashboard` with that email/password, or via `P
 - **Current metrics are request-computed, not push/streaming real-time.** Every "current"/"live" P3 endpoint runs its query fresh against the database on each request, evaluated as of the latest ingested event (see "What 'current' means" above) -- there is no background job, cache, or WebSocket/SSE push keeping a value updated between requests.
 - **Occupancy's read-side protection has a boundary.** Occupancy is computed by counting distinct visitors, specifically so that overlapping visit-session rows for one person (which out-of-order event delivery can produce -- see below) are never counted as two people. That protection is read-side only: it does not correct or remove the underlying overlapping session rows themselves, which remain in the data as ingestion produced them. Ingestion's session-reuse logic keys on whether a session is already open, not on event timestamp order, so out-of-order delivery (a real possibility for both the batch JSONL importer and the `/events/ingest` batch endpoint, neither of which guarantees chronological processing order) can still produce that overlapping-session anomaly in the raw data; only its effect on the occupancy count is corrected here. Fixing the root cause is an ingestion-layer change, out of scope for this phase.
 
+## P7 -- Spatial Intelligence & Store-Agnostic Onboarding (2026-09-05)
+
+An independent product/architecture audit (available in project history) found that while everything below the `Zone`/`Camera` layer (events, sessions, identity, POS, analytics, insights, dashboard) was already generic, two concrete places hardcoded store-specific configuration directly in Python source: `pipeline/video/config.py`'s `default_video_configs()` (ST1001/ST1002's cameras, zone polygons, video paths) and `app/services/heatmap_service.py`'s `STORE_LAYOUTS` dict (layout image paths). P7 closes that gap. See `docs/DESIGN.md`'s "Spatial Configuration (P7)" section and `docs/CHOICES.md`'s P7 entries for full detail.
+
+- **New spatial data model.** `Map` (an uploaded store floor plan asset), `CameraCoverage` (a camera-frame polygon or entry line, associated with a `Zone`), a `map_polygon_json` display outline on `Zone`, and video-processing fields (`video_path`, `start_time`, `sample_fps`, etc.) on `Camera`. Added via `alembic/versions/79382dd38824_...py`; purely additive, no existing table changed shape.
+- **Onboarding API.** `POST /stores` (any authenticated user; grants the creator `ADMIN`) plus `/stores/{store_id}/config/{maps,zones,cameras,cameras/{id}/coverage}` (`ADMIN` to write, `ANALYST`+ to read -- the existing JWT/`StoreAccess` RBAC, no new auth system) in `app/api/onboarding.py`.
+- **Minimal onboarding UI.** `onboarding/` (plain HTML/CSS/JS, mounted at `/onboarding`, same login as the dashboard) -- upload a map, draw/name/type zones on it, register cameras, and draw each camera's coverage geometry on an optional reference still image. Deliberately separate from, and does not modify, `dashboard/`.
+- **Video pipeline reads configuration from the database.** `pipeline.video.config.load_video_configs_from_db` replaces the deleted `default_video_configs()`, building the same `VideoProcessingConfig`/`PolygonZone`/`EntryLine` objects `pipeline/video/events.py` and `pipeline/video/tracking.py` always consumed -- neither of those modules changed. `pipeline/video/process_videos.py` now takes an optional `--store-id` and loads from the database at startup.
+- **ST1001/ST1002 migrated, not special-cased.** `pipeline.migrate_legacy_store_config` (a one-off script, not a general onboarding tool) wrote their former hardcoded configuration into the new model with unchanged polygon coordinates; `tests/test_legacy_config_migration.py` asserts the migrated configuration reconstructs equivalently to the deleted literals.
+- **Store-agnostic proof.** `tests/test_store_agnostic_onboarding.py` onboards a fictitious, non-Purplle "Northwind Electronics" store (zones: Mobiles, Laptops, Accessories, Billing) purely through the onboarding service/API, then runs the *unmodified* `pipeline.video.events`, `EventIngestionService`, `OccupancyService`, `TimeSeriesService`, and `QueueService` against it and asserts correct results -- proving the downstream engine needed zero Purplle-specific knowledge.
+- **Camera-to-map mapping stays intentionally simple.** No camera calibration, homography, or automatic camera-to-map reconstruction is implemented -- see `docs/CHOICES.md`. A `CameraCoverage` row's geometry is in that camera's own frame, exactly as `pipeline/video/events.py`'s point-in-polygon/line-side logic always tested against; a `Zone`'s map outline is a separate, purely cosmetic drawing.
+- **Documentation correction.** `docs/DESIGN.md`'s POS correlation section previously listed zone-dwell history and product/brand-to-zone mapping as correlation inputs; `app/services/correlation_service.py` has never read either. Corrected to describe only what is actually implemented (store match + POS-timestamp-to-queue-exit/session-exit time proximity).
+- **New dependency:** `python-multipart` (small, pure-Python, no transitive dependencies), required for FastAPI's `UploadFile` used by the new map/reference-image upload routes. Added to `requirements.txt`, not the video/ML dependency set.
+
 ## Quickstart
 
 ```powershell
@@ -110,9 +124,11 @@ This is deterministic, offline generation -- no source video, model weights, or 
 
 Run these commands from the repository root.
 
-1. Generate CCTV events from the configured video assets:
+1. Generate CCTV events from the configured video assets. This step needs the video-processing stack (YOLOv8 + OpenCV), not installed by `requirements-dev.txt` above. As of P7, camera/zone configuration is loaded from the database rather than hardcoded -- run the one-off legacy migration once to populate ST1001/ST1002 (see "P7" above; a real new store is onboarded through `/stores`/`onboarding/` instead, never this script):
 
 ```powershell
+pip install -r requirements-video.txt
+python -m pipeline.migrate_legacy_store_config
 python -m pipeline.video.process_videos --output data/generated_cctv_events.jsonl
 ```
 

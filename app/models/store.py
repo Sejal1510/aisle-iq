@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, String
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -48,6 +48,23 @@ class Store(Base):
 
 
 class Camera(Base):
+    """The processing-tuning columns below (``video_path`` through
+    ``queue_abandonment_seconds``) are P7 additions: they are exactly the
+    per-camera fields ``pipeline.video.config.VideoProcessingConfig`` already
+    needed, moved from hardcoded Python literals
+    (``pipeline/video/config.py``'s old ``default_video_configs()``) into
+    persisted, store-specific configuration. All are nullable -- a camera
+    that has not been fully configured for video processing yet (e.g. one
+    only used for live viewing, or mid-onboarding) is still a valid Camera
+    row; ``pipeline.video.config.load_video_configs_from_db`` skips cameras
+    missing the fields it needs rather than failing the whole store.
+
+    ``reference_image_path`` is an optional still image an operator can
+    upload for this camera (not extracted from video -- see the P7 audit's
+    dependency-discipline note) purely as a drawing backdrop for its
+    ``CameraCoverage`` geometry in the onboarding UI.
+    """
+
     __tablename__ = "camera"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -55,12 +72,30 @@ class Camera(Base):
     name: Mapped[str | None] = mapped_column(String)
     role: Mapped[str | None] = mapped_column(String)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    video_path: Mapped[str | None] = mapped_column(String)
+    reference_image_path: Mapped[str | None] = mapped_column(String)
+    start_time: Mapped[datetime | None] = mapped_column()
+    sample_fps: Mapped[float | None] = mapped_column(Float)
+    confidence_threshold: Mapped[float | None] = mapped_column(Float)
+    queue_completion_seconds: Mapped[int | None] = mapped_column(Integer)
+    queue_abandonment_seconds: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(default=func.now())
 
     store: Mapped["Store"] = relationship(back_populates="cameras")
 
 
 class Zone(Base):
+    """``map_polygon_json`` (P7) is the zone's shape drawn on the store's
+    ``Map`` -- purely for visualization/onboarding, e.g. rendering zone
+    outlines over the layout image. It is independent of the camera-frame
+    geometry a ``CameraCoverage`` row uses for actual point-in-polygon
+    testing (``pipeline/video/events.py`` never reads this field); the two
+    are associated only through sharing the same ``zone_id``, per the P7
+    audit's conservative camera-to-map mapping decision. Nullable because a
+    zone can exist (and already drive CV/analytics) before its map outline
+    has been drawn.
+    """
+
     __tablename__ = "zone"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -69,6 +104,7 @@ class Zone(Base):
     type: Mapped[ZoneType] = mapped_column()
     is_revenue_zone: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    map_polygon_json: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=func.now())
 
     store: Mapped["Store"] = relationship(back_populates="zones")

@@ -7,7 +7,6 @@ from typing import Any, TextIO
 
 import structlog
 
-from pipeline.video.config import default_video_configs
 from pipeline.video.events import VideoEventGenerator
 from pipeline.video.tracking import UltralyticsByteTracker, read_video_metadata
 
@@ -26,9 +25,33 @@ def main() -> None:
     parser.add_argument("--sample-fps", type=float, default=None, help="Override configured frame sampling FPS.")
     parser.add_argument("--max-frames", type=int, default=None, help="Optional cap for smoke tests.")
     parser.add_argument("--metadata-only", action="store_true", help="Inspect configured videos without running inference.")
+    parser.add_argument(
+        "--store-id", default=None, help="Only process cameras configured for this store. Default: all stores."
+    )
     args = parser.parse_args()
 
-    configs = default_video_configs()
+    # P7: camera/zone/video-path configuration is loaded from the database
+    # (populated via the onboarding API/UI, or -- for ST1001/ST1002 -- via
+    # pipeline.migrate_legacy_store_config) instead of a hardcoded Python
+    # function. See pipeline/video/config.py's load_video_configs_from_db.
+    from app.db.session import SessionLocal, init_db
+    from pipeline.video.config import load_video_configs_from_db
+
+    init_db()
+    db = SessionLocal()
+    try:
+        configs = load_video_configs_from_db(db, store_id=args.store_id)
+    finally:
+        db.close()
+
+    if not configs:
+        logger.warning(
+            "no_video_configs_found",
+            store_id=args.store_id,
+            hint="Onboard at least one store/camera with a video_path, start_time, and role via the onboarding API before running this command.",
+        )
+        return
+
     if args.sample_fps is not None:
         configs = [
             config.__class__(

@@ -2,21 +2,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.storage import resolve_relative_path
 from app.models.event import Event
+from app.models.spatial import Map
 from app.models.tracking import VisitSession
 from app.schemas.analytics import HeatmapPoint, StoreHeatmapResponse
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-STORE_LAYOUTS = {
-    "ST1001": PROJECT_ROOT / "data" / "Store 1" / "Store 1 - layout.png",
-    "ST1002": PROJECT_ROOT / "data" / "Store 2" / "store 2 - layout.png",
-}
 
 
 @dataclass
@@ -92,18 +86,27 @@ class HeatmapService:
         )
         return "HIGH" if session_count >= 20 else "LOW"
 
-    @staticmethod
-    def layout_image_path(store_id: str) -> Path | None:
-        path = STORE_LAYOUTS.get(store_id)
-        if path is None or not path.is_file():
-            return None
-        return path
+    def active_map(self, store_id: str) -> Map | None:
+        """The store's current layout asset, if one has been uploaded through
+        onboarding (P7). Replaces the old hardcoded ``STORE_LAYOUTS`` dict --
+        a store with no uploaded map simply has no layout image, rather than
+        the engine only knowing about two specific stores."""
+        return self.db.execute(
+            select(Map).where(Map.store_id == store_id, Map.is_active.is_(True)).order_by(Map.created_at.desc())
+        ).scalars().first()
 
-    @staticmethod
-    def layout_image_url(store_id: str) -> str | None:
-        if HeatmapService.layout_image_path(store_id) is None:
+    def layout_image_path(self, store_id: str):
+        map_row = self.active_map(store_id)
+        if map_row is None:
             return None
-        return f"/stores/{store_id}/layout"
+        path = resolve_relative_path(map_row.file_path)
+        return path if path.is_file() else None
+
+    def layout_image_url(self, store_id: str) -> str | None:
+        map_row = self.active_map(store_id)
+        if map_row is None:
+            return None
+        return f"/stores/{store_id}/config/maps/{map_row.id}/file"
 
 
 def _clamp(value: float) -> float:

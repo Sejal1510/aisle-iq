@@ -86,33 +86,33 @@ database/
 
 Core entities:
 
-- `Store`: normalized store identity such as `ST1076`, plus original source aliases.
-- `Camera`: camera within a store, with role metadata such as entry, zone, billing, or mixed.
-- `Zone`: business/layout area within a store, including type, revenue flag, and geometry.
-- `Layout`: store floorplan image metadata and coordinate calibration.
+- `Organization` / `Store`: tenant boundary and normalized store identity.
+- `Camera`: camera within a store, with role metadata (entry/zone/billing) and, as of P7, its video-processing configuration (`video_path`, `start_time`, `sample_fps`, `confidence_threshold`, queue timing, and an optional `reference_image_path` still image used as an onboarding drawing backdrop) -- see "Spatial Configuration (P7)" below.
+- `Zone`: business/layout area within a store, including type (`ZoneType`), revenue flag, and (P7) an optional `map_polygon_json` outline for display on the store's map.
+- `Map` (P7): a retailer-uploaded floor plan asset (image/PDF) belonging to a store. Plain file storage plus display metadata -- no automatic parsing of its contents.
+- `CameraCoverage` (P7): the camera-frame geometry (polygon or entry line) a camera's video processing tests against, associated with the `Zone` it represents. See "Spatial Configuration (P7)" below for why this is deliberately not a calibrated camera-to-map transform.
 - `IdentityAlias`: mapping from source identity values to canonical tracked entities.
 - `TrackedEntity`: canonical visitor/person representation across cameras and sessions.
 - `VisitSession`: one continuous store visit by a tracked entity.
 - `RawEvent`: immutable source event payload and ingestion metadata.
 - `Event`: normalized event used by analytics.
-- `QueueEventDetail`: queue-specific timing and position attributes.
 - `PosTransaction`: POS order header.
 - `PosTransactionItem`: product/brand/amount line item.
 - `TransactionCorrelation`: confidence-scored link between a visit and a POS transaction.
-- `MetricSnapshot`: derived metrics for dashboard/API performance.
 
 Recommended relationship shape:
 
 ```text
+Organization 1--N Store
 Store 1--N Camera
 Store 1--N Zone
-Store 1--N Layout
+Store 1--N Map
+Camera N--N Zone (through CameraCoverage)
 Store 1--N TrackedEntity
 TrackedEntity 1--N IdentityAlias
 TrackedEntity 1--N VisitSession
 VisitSession 1--N Event
 RawEvent 1--0..1 Event
-Event 1--0..1 QueueEventDetail
 Store 1--N PosTransaction
 PosTransaction 1--N PosTransactionItem
 VisitSession N--N PosTransaction through TransactionCorrelation
@@ -120,7 +120,18 @@ Zone 1--N Event
 Camera 1--N Event
 ```
 
-The current ORM already includes several of these entities. Roadmap-only entities include a separate raw-event archive table, dedicated identity alias table, queue detail table, layout geometry model, and materialized aggregate model.
+All of the above is implemented (not roadmap) as of P7. Still-roadmap items: a `QueueEventDetail`/materialized-aggregate model, and calibrated camera-to-map geometry beyond the deliberately simple camera-frame-polygon approach described below.
+
+## Spatial Configuration (P7)
+
+Status: implemented. Replaces the pre-P7 state, in which ST1001/ST1002's cameras, zone polygons, and layout image paths were hardcoded Python literals in `pipeline/video/config.py`'s `default_video_configs()` and `app/services/heatmap_service.py`'s `STORE_LAYOUTS` dict -- both now deleted.
+
+- A retailer's store map is a plain uploaded image/PDF (`Map`), stored on local disk and referenced by path. No OCR, floor-plan parsing, or automatic zone extraction is performed on it -- zone boundaries are drawn (or numerically entered) by a human via the onboarding UI (`onboarding/`) and confirmed before being saved.
+- A `Zone`'s `map_polygon_json` is purely a display/visualization outline on the map. It has no bearing on video processing.
+- Camera-to-zone spatial mapping is deliberately conservative (see the P7 audit's "Camera -> Map -> Zone Mapping" section): a `CameraCoverage` row stores the polygon (or, for an entry camera, a threshold line) **in that camera's own frame coordinates**, associated with the `Zone` it represents. `pipeline/video/events.py`'s existing point-in-polygon/line-side logic is unchanged -- it was always a same-frame test; P7 only moved where its input geometry comes from (persisted configuration instead of Python literals). No camera intrinsic/extrinsic calibration, homography, or automatic camera-to-map reconstruction is implemented or planned for this phase; see the audit for why that would be premature given the available inputs.
+- `pipeline.video.config.load_video_configs_from_db` builds the same `VideoProcessingConfig`/`PolygonZone`/`EntryLine` objects the video pipeline always used, from `Camera`/`Zone`/`CameraCoverage` rows. A camera missing a role, `video_path`, or `start_time` is silently skipped (onboarding can be a work in progress) rather than failing the whole store.
+- `pipeline.migrate_legacy_store_config` is a one-off, throwaway script (not a general onboarding tool) that wrote ST1001/ST1002's former hardcoded configuration into this model; `tests/test_legacy_config_migration.py` checks the migrated configuration reconstructs byte-for-byte-equivalent polygons/lines to the deleted literals.
+- Onboarding (creating a store, uploading its map, drawing zones, registering cameras, and defining coverage) happens through `/stores` + `/stores/{store_id}/config/...` (`app/api/onboarding.py`) or the minimal `onboarding/` UI on top of it -- never by editing Python source. The store-agnostic proof of this is `tests/test_store_agnostic_onboarding.py`, which onboards a fictitious non-Purplle "Northwind Electronics" store purely through this API and runs the unmodified event-ingestion/analytics stack against it.
 
 ## Identity Mapping Strategy
 
@@ -275,21 +286,19 @@ CSV row
 -> confidence scoring
 ```
 
-Correlation inputs:
+Correlation inputs actually implemented (`app/services/correlation_service.py`):
 
 - Visit session store ID.
 - Visit exit time.
 - Billing queue completion time.
 - POS transaction timestamp.
-- Zone dwell history.
-- Product/brand-to-zone mapping when available.
-- Group size and group ID where available.
 
-Correlation scoring:
+Correlation scoring actually implemented:
 
-- Strongest signal: same store and POS timestamp near queue completion or visit exit.
-- Medium signal: visitor completed billing queue near POS timestamp.
-- Supporting signal: visitor dwelled in zones mapped to purchased brands/products.
+- Rejection: store mismatch scores 0.0 (`method="store_mismatch"`).
+- Otherwise: a single time-proximity score between the POS transaction timestamp and either the visit's queue-exit time (`method="queue_exit_time"`, preferred when a queue event exists) or its session exit time (`method="session_exit_time"`).
+
+**Not implemented** (corrected from an earlier draft of this document that described them as inputs): zone dwell history and product/brand-to-zone mapping are not read by `CorrelationService` at all -- there is no code path connecting a visit's zone-dwell events or a transaction's line-item brands to the correlation score. `PosTransactionItem.brand_name` is stored and returned by ingestion/analytics, but never joined against `Zone`. If zone/brand-aware correlation is wanted later, it is new work, not something partially there already.
 - Negative signal: store mismatch, staff identity, abandoned queue, time-window miss.
 
 The output is `TransactionCorrelation` with `confidence_score`, `correlation_method`, and explainable features. No-match outcomes are valid and should be surfaced, especially because the current POS sample uses `ST1008` while sample events use `ST1076`.

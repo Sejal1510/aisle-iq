@@ -224,11 +224,20 @@ def get_period_comparison(
 
 
 @router.get("/stores/{store_id}/layout")
-def get_store_layout(store_id: str, access: StoreAccess = _read_access) -> FileResponse:
-    layout_path = HeatmapService.layout_image_path(store_id)
+def get_store_layout(
+    store_id: str, db: Session = Depends(get_db), access: StoreAccess = _read_access
+) -> FileResponse:
+    """Kept for backward compatibility with the pre-P7 layout URL; the P7
+    onboarding API's ``/stores/{store_id}/config/maps/{map_id}/file`` is the
+    canonical route (see ``HeatmapService.layout_image_url``). Both resolve
+    to the store's active ``Map`` row -- there is no more hardcoded
+    ``STORE_LAYOUTS`` mapping."""
+    heatmap_service = HeatmapService(db)
+    layout_path = heatmap_service.layout_image_path(store_id)
     if layout_path is None:
         raise HTTPException(status_code=404, detail="Store layout image not found")
-    return FileResponse(layout_path, media_type="image/png")
+    map_row = heatmap_service.active_map(store_id)
+    return FileResponse(layout_path, media_type=(map_row.content_type if map_row else None) or "image/png")
 
 
 @router.post("/stores/{store_id}/access", response_model=StoreAccessGrantResponse, status_code=201)

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AisleIQ Store Onboarding</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="login-gate" class="login-gate">
+    <form id="login-form" class="login-card">
+      <h1>AisleIQ Onboarding</h1>
+      <p class="muted">Sign in with the same account you use for the AisleIQ dashboard.</p>
+      <label>Email<input id="login-email" type="email" required /></label>
+      <label>Password<input id="login-password" type="password" required /></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="error" hidden></p>
+    </form>
+  </div>
+
+  <div id="app-shell" class="app-shell" hidden>
+    <header class="topbar">
+      <h1>AisleIQ &mdash; Store Onboarding</h1>
+      <button id="logout-button" class="link-button">Sign out</button>
+    </header>
+
+    <main class="layout">
+      <section class="panel" id="panel-store">
+        <h2>1. Store</h2>
+        <div class="row">
+          <label>Store ID<input id="store-id-input" placeholder="e.g. ST_ELECTRONICS_9001" /></label>
+          <button id="load-store-button">Load</button>
+        </div>
+        <details>
+          <summary>Create a new store</summary>
+          <div class="row">
+            <label>New store ID<input id="new-store-id" /></label>
+            <label>Name<input id="new-store-name" /></label>
+            <button id="create-store-button">Create store</button>
+          </div>
+        </details>
+        <p id="store-status" class="muted"></p>
+      </section>
+
+      <section class="panel" id="panel-map">
+        <h2>2. Store map</h2>
+        <div class="row">
+          <input id="map-file-input" type="file" accept="image/*,application/pdf" />
+          <input id="map-name-input" placeholder="Map name (optional)" />
+          <button id="upload-map-button">Upload map</button>
+        </div>
+        <p class="muted">The map is a plain image/PDF you upload &mdash; nothing is auto-detected from it. You draw zone outlines on top of it below.</p>
+        <div class="canvas-wrap">
+          <canvas id="drawing-canvas" width="640" height="480"></canvas>
+        </div>
+        <p id="draw-hint" class="muted"></p>
+        <div class="row" id="draw-controls" hidden>
+          <button id="finish-polygon-button">Finish polygon</button>
+          <button id="cancel-draw-button">Cancel</button>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-zones">
+        <h2>3. Zones</h2>
+        <table class="data-table">
+          <thead><tr><th>Zone ID</th><th>Name</th><th>Type</th><th>Revenue</th><th>Map shape</th></tr></thead>
+          <tbody id="zones-table-body"></tbody>
+        </table>
+        <div class="row">
+          <label>Zone ID<input id="zone-id-input" /></label>
+          <label>Name<input id="zone-name-input" /></label>
+          <label>Type
+            <select id="zone-type-input">
+              <option value="SHELF">SHELF</option>
+              <option value="DISPLAY">DISPLAY</option>
+              <option value="CHECKOUT">CHECKOUT</option>
+              <option value="ENTRY_DOOR">ENTRY_DOOR</option>
+              <option value="OTHER">OTHER</option>
+            </select>
+          </label>
+          <label class="checkbox"><input id="zone-revenue-input" type="checkbox" /> Revenue zone</label>
+        </div>
+        <div class="row">
+          <button id="draw-zone-shape-button" type="button">Draw shape on map</button>
+          <span id="zone-shape-status" class="muted"></span>
+          <button id="create-zone-button">Add zone</button>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-cameras">
+        <h2>4. Cameras</h2>
+        <table class="data-table">
+          <thead><tr><th>Camera ID</th><th>Name</th><th>Role</th><th>Video path</th><th>Reference image</th></tr></thead>
+          <tbody id="cameras-table-body"></tbody>
+        </table>
+        <div class="row">
+          <label>Camera ID<input id="camera-id-input" /></label>
+          <label>Name<input id="camera-name-input" /></label>
+          <label>Role
+            <select id="camera-role-input">
+              <option value="entry">entry</option>
+              <option value="zone">zone</option>
+              <option value="billing">billing</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Video path<input id="camera-video-path-input" placeholder="videos/store/cam1.mp4" /></label>
+          <label>Start time<input id="camera-start-time-input" type="datetime-local" /></label>
+        </div>
+        <details>
+          <summary>Advanced processing settings (optional &mdash; defaults are used if left blank)</summary>
+          <div class="row">
+            <label>Sample FPS<input id="camera-sample-fps-input" type="number" step="0.1" /></label>
+            <label>Confidence threshold<input id="camera-confidence-input" type="number" step="0.01" /></label>
+            <label>Queue completion (s)<input id="camera-queue-complete-input" type="number" /></label>
+            <label>Queue abandonment (s)<input id="camera-queue-abandon-input" type="number" /></label>
+          </div>
+        </details>
+        <div class="row">
+          <button id="create-camera-button">Add camera</button>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-coverage">
+        <h2>5. Camera coverage (camera-frame &harr; zone)</h2>
+        <p class="muted">
+          This tells the video pipeline what part of one camera's own frame corresponds to which zone
+          (or, for an entry camera, where the entry/exit threshold line is). It does not attempt to
+          calibrate cameras against each other.
+        </p>
+        <div class="row">
+          <label>Camera
+            <select id="coverage-camera-select"></select>
+          </label>
+          <label>Reference still image (optional, camera-frame drawing backdrop)
+            <input id="camera-reference-file-input" type="file" accept="image/*" />
+          </label>
+          <button id="upload-reference-button">Upload reference image</button>
+        </div>
+
+        <div id="coverage-entry-controls" hidden>
+          <div class="row">
+            <label>Axis
+              <select id="entry-axis-select">
+                <option value="x">x (vertical line)</option>
+                <option value="y">y (horizontal line)</option>
+              </select>
+            </label>
+            <label>Position (0&ndash;1)<input id="entry-position-input" type="range" min="0" max="1" step="0.01" value="0.5" /></label>
+            <span id="entry-position-value">0.50</span>
+            <label class="checkbox"><input id="entry-inside-greater-input" type="checkbox" checked /> Inside is greater than position</label>
+          </div>
+          <button id="save-entry-coverage-button">Save entry line</button>
+        </div>
+
+        <div id="coverage-zone-controls" hidden>
+          <div class="row">
+            <label>Zone
+              <select id="coverage-zone-select"></select>
+            </label>
+            <button id="draw-coverage-shape-button" type="button">Draw shape on camera frame</button>
+            <span id="coverage-shape-status" class="muted"></span>
+            <button id="save-coverage-button">Save coverage</button>
+          </div>
+        </div>
+
+        <table class="data-table">
+          <thead><tr><th>Coverage</th><th>Zone</th><th>Shape</th><th></th></tr></thead>
+          <tbody id="coverage-table-body"></tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

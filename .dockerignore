@@ -1,0 +1,36 @@
+# Local environment / VCS -- never needed at runtime, and .venv/.git can be
+# large. Not excluded: data/, dashboard/, and onboarding/ -- all are read at
+# runtime (dashboard/ and onboarding/ are mounted as static files by
+# app/main.py; data/maps and data/camera_refs hold uploaded store map and
+# camera reference images served by the P7 onboarding API).
+.git
+.venv
+venv
+env/
+
+# Python bytecode/caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Dev/test/CI -- not needed in the runtime image; Dockerfile only installs
+# requirements.txt, not requirements-dev.txt or requirements-video.txt.
+tests/
+docs/
+.github/
+requirements-dev.txt
+requirements-video.txt
+
+# Local runtime artifacts -- never read at startup (logs go to stdout; see
+# app/core/logging.py), and a local SQLite file should never be baked into
+# an image.
+logs/*
+store_intelligence.db
+.env
+
+# Docker/compose files themselves aren't needed inside the image being built
+Dockerfile
+docker-compose.yml
+.dockerignore

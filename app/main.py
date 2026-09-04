@@ -15,6 +15,7 @@ from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from app.api import auth as auth_module
 from app.api import events as events_module
+from app.api import onboarding as onboarding_module
 from app.api import stores as stores_module
 from app.core.config import get_settings
 from app.core.logging import setup_logging
@@ -77,7 +78,19 @@ app.include_router(
     auth_module.router,
     tags=["auth"]
 )
+app.include_router(
+    onboarding_module.router,
+    prefix="/api/v1",
+    tags=["onboarding"]
+)
+app.include_router(
+    onboarding_module.router,
+    tags=["onboarding"]
+)
 app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
+ONBOARDING_DIR = PROJECT_ROOT / "onboarding"
+if ONBOARDING_DIR.is_dir():
+    app.mount("/onboarding", StaticFiles(directory=ONBOARDING_DIR, html=True), name="onboarding")
 
 
 @app.middleware("http")

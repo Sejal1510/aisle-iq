@@ -17,10 +17,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.flake8-bugbear]
-# FastAPI's dependency-injection idiom relies on calling Depends()/Query()/Header()
-# as argument defaults; these are not the mutable-default-argument bug B008 exists
-# to catch, so they're treated as immutable calls rather than suppressing B008.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header"]
+# FastAPI's dependency-injection idiom relies on calling Depends()/Query()/Header()/
+# File() as argument defaults; these are not the mutable-default-argument bug B008
+# exists to catch, so they're treated as immutable calls rather than suppressing B008.
+# File() added in P7 (app/api/onboarding.py's map/reference-image upload routes).
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.File", "fastapi.Form"]
 
 [tool.ruff.lint.per-file-ignores]
 # SQLAlchemy Mapped["ClassName"] relationship() annotations reference sibling

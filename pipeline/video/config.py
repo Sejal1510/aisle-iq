@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 class CameraRole(str, Enum):
@@ -54,131 +58,96 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 
 
-def default_video_configs() -> list[VideoProcessingConfig]:
-    """Return conservative defaults for the provided Store 1 and Store 2 assets.
+def load_video_configs_from_db(db: Session, store_id: str | None = None) -> list[VideoProcessingConfig]:
+    """Build ``VideoProcessingConfig`` objects from persisted store
+    configuration (P7) instead of Python literals -- this is the
+    store-agnostic replacement for the old, now-deleted
+    ``default_video_configs()`` (see ``pipeline.migrate_legacy_store_config``
+    and ``tests/test_legacy_config_migration.py``).
 
-    Coordinates are normalized to frame width/height. They are intentionally
-    configuration data, not business logic, so they can be calibrated later from
-    the layout images without changing the pipeline.
+    ``VideoProcessingConfig``/``PolygonZone``/``EntryLine`` themselves are
+    unchanged; only how they get constructed changes, so
+    ``pipeline.video.tracking``/``pipeline.video.events`` need no changes at
+    all. A ``Camera`` row only produces a config if it has a recognized
+    ``role``, a ``video_path``, and a ``start_time`` -- a camera that is
+    registered but not yet fully configured for offline video processing is
+    silently skipped rather than failing the whole store, since onboarding
+    (map/zones/cameras) can legitimately be a work in progress.
     """
-    store_1_start = datetime(2026, 6, 1, 10, 0, 0)
-    store_2_start = datetime(2026, 6, 1, 10, 0, 0)
+    from sqlalchemy import select
 
-    store_1_zone = PolygonZone(
-        id="ST1001_MAIN_ZONE",
-        name="Store 1 Sales Floor",
-        type="SHELF",
-        is_revenue_zone=True,
-        polygon=(
-            Point(0.08, 0.10),
-            Point(0.92, 0.10),
-            Point(0.92, 0.88),
-            Point(0.08, 0.88),
-        ),
-    )
-    store_1_queue = PolygonZone(
-        id="ST1001_BILLING_QUEUE",
-        name="Store 1 Billing Queue",
-        type="BILLING",
-        is_revenue_zone=True,
-        polygon=(
-            Point(0.55, 0.18),
-            Point(0.95, 0.18),
-            Point(0.95, 0.92),
-            Point(0.55, 0.92),
-        ),
-    )
-    store_2_zone = PolygonZone(
-        id="ST1002_MAIN_ZONE",
-        name="Store 2 Sales Floor",
-        type="SHELF",
-        is_revenue_zone=True,
-        polygon=(
-            Point(0.08, 0.14),
-            Point(0.92, 0.14),
-            Point(0.92, 0.90),
-            Point(0.08, 0.90),
-        ),
-    )
-    store_2_queue = PolygonZone(
-        id="ST1002_BILLING_QUEUE",
-        name="Store 2 Billing Queue",
-        type="BILLING",
-        is_revenue_zone=True,
-        polygon=(
-            Point(0.34, 0.08),
-            Point(0.72, 0.08),
-            Point(0.72, 0.45),
-            Point(0.34, 0.45),
-        ),
-    )
+    from app.models.spatial import CameraCoverage
+    from app.models.store import Camera, Zone
+    from app.services.store_config_service import LineGeometry, parse_geometry_json
 
-    return [
-        VideoProcessingConfig(
-            store_id="ST1001",
-            camera_id="ST1001_CAM_ZONE_1",
-            role=CameraRole.ZONE,
-            video_path=DATA_DIR / "Store 1" / "CAM 1 - zone.mp4",
-            start_time=store_1_start,
-            zones=(store_1_zone,),
-        ),
-        VideoProcessingConfig(
-            store_id="ST1001",
-            camera_id="ST1001_CAM_ZONE_2",
-            role=CameraRole.ZONE,
-            video_path=DATA_DIR / "Store 1" / "CAM 2 - zone.mp4",
-            start_time=store_1_start,
-            zones=(store_1_zone,),
-        ),
-        VideoProcessingConfig(
-            store_id="ST1001",
-            camera_id="ST1001_CAM_ENTRY",
-            role=CameraRole.ENTRY,
-            video_path=DATA_DIR / "Store 1" / "CAM 3 - entry.mp4",
-            start_time=store_1_start,
-            entry_line=EntryLine(axis="x", position=0.50, inside_greater_than_position=True),
-        ),
-        VideoProcessingConfig(
-            store_id="ST1001",
-            camera_id="ST1001_CAM_BILLING",
-            role=CameraRole.BILLING,
-            video_path=DATA_DIR / "Store 1" / "CAM 5 - billing.mp4",
-            start_time=store_1_start,
-            zones=(store_1_queue,),
-            queue_zone_id=store_1_queue.id,
-        ),
-        VideoProcessingConfig(
-            store_id="ST1002",
-            camera_id="ST1002_CAM_BILLING",
-            role=CameraRole.BILLING,
-            video_path=DATA_DIR / "Store 2" / "billing_area.mp4",
-            start_time=store_2_start,
-            zones=(store_2_queue,),
-            queue_zone_id=store_2_queue.id,
-        ),
-        VideoProcessingConfig(
-            store_id="ST1002",
-            camera_id="ST1002_CAM_ENTRY_1",
-            role=CameraRole.ENTRY,
-            video_path=DATA_DIR / "Store 2" / "entry 1.mp4",
-            start_time=store_2_start,
-            entry_line=EntryLine(axis="y", position=0.55, inside_greater_than_position=False),
-        ),
-        VideoProcessingConfig(
-            store_id="ST1002",
-            camera_id="ST1002_CAM_ENTRY_2",
-            role=CameraRole.ENTRY,
-            video_path=DATA_DIR / "Store 2" / "entry 2.mp4",
-            start_time=store_2_start,
-            entry_line=EntryLine(axis="y", position=0.55, inside_greater_than_position=False),
-        ),
-        VideoProcessingConfig(
-            store_id="ST1002",
-            camera_id="ST1002_CAM_ZONE",
-            role=CameraRole.ZONE,
-            video_path=DATA_DIR / "Store 2" / "zone.mp4",
-            start_time=store_2_start,
-            zones=(store_2_zone,),
-        ),
-    ]
+    query = select(Camera).where(Camera.video_path.is_not(None), Camera.start_time.is_not(None))
+    if store_id is not None:
+        query = query.where(Camera.store_id == store_id)
+
+    configs: list[VideoProcessingConfig] = []
+    for camera in db.scalars(query.order_by(Camera.id)):
+        try:
+            role = CameraRole(camera.role)
+        except ValueError:
+            continue
+
+        zones: list[PolygonZone] = []
+        entry_line: EntryLine | None = None
+        queue_zone_id: str | None = None
+
+        coverage_rows = db.scalars(
+            select(CameraCoverage).where(CameraCoverage.camera_id == camera.id).order_by(CameraCoverage.created_at)
+        )
+        for coverage in coverage_rows:
+            geometry = parse_geometry_json(coverage.geometry_kind, coverage.geometry_json)
+
+            if isinstance(geometry, LineGeometry):
+                entry_line = EntryLine(
+                    axis=geometry.axis,
+                    position=geometry.position,
+                    inside_greater_than_position=geometry.inside_greater_than_position,
+                )
+                continue
+
+            if coverage.zone_id is None:
+                continue
+            zone = db.get(Zone, coverage.zone_id)
+            if zone is None:
+                continue
+            zones.append(
+                PolygonZone(
+                    id=zone.id,
+                    name=zone.name,
+                    type=zone.type.value,
+                    is_revenue_zone=zone.is_revenue_zone,
+                    polygon=tuple(Point(x, y) for x, y in geometry.points),
+                )
+            )
+            if role == CameraRole.BILLING and queue_zone_id is None:
+                queue_zone_id = zone.id
+
+        configs.append(
+            VideoProcessingConfig(
+                store_id=camera.store_id,
+                camera_id=camera.id,
+                role=role,
+                video_path=Path(camera.video_path),
+                start_time=camera.start_time,
+                zones=tuple(zones),
+                entry_line=entry_line,
+                queue_zone_id=queue_zone_id,
+                sample_fps=camera.sample_fps if camera.sample_fps is not None else 2.0,
+                confidence_threshold=(
+                    camera.confidence_threshold if camera.confidence_threshold is not None else 0.35
+                ),
+                queue_completion_seconds=(
+                    camera.queue_completion_seconds if camera.queue_completion_seconds is not None else 45
+                ),
+                queue_abandonment_seconds=(
+                    camera.queue_abandonment_seconds if camera.queue_abandonment_seconds is not None else 8
+                ),
+            )
+        )
+
+    return configs
 

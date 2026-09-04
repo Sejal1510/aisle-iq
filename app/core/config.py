@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
 
+    # P7 onboarding uploads (app/api/onboarding.py, app/core/storage.py).
+    # Deliberately two separate, small settings rather than one shared value:
+    # a store map (potentially a scanned floor plan or PDF) is reasonably
+    # larger than a single camera reference still frame.
+    max_map_upload_bytes: int = 20 * 1024 * 1024  # 20 MB
+    max_camera_reference_upload_bytes: int = 10 * 1024 * 1024  # 10 MB
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
