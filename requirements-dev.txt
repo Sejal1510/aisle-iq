@@ -1,0 +1,11 @@
+# Local development and CI: adds linting/testing tools on top of the runtime
+# dependencies. Not installed by the Docker image (see Dockerfile) -- dev/test
+# tooling has no place in a shipped production image.
+-r requirements.txt
+
+# Linting & Formatting
+ruff
+
+# Testing
+pytest
+httpx  # required by fastapi.testclient.TestClient

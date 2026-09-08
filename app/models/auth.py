@@ -3,9 +3,8 @@ from datetime import datetime
 
 from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.sql import func
 
-from app.db.base import Base
+from app.db.base import Base, utcnow
 from app.models.enums import Role
 
 
@@ -23,7 +22,7 @@ class ApiKey(Base):
     store_id: Mapped[str] = mapped_column(ForeignKey("store.id"), index=True)
     key_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
 class User(Base):
@@ -43,7 +42,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
 class StoreAccess(Base):
@@ -60,4 +59,4 @@ class StoreAccess(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("user.id"), index=True)
     store_id: Mapped[str] = mapped_column(ForeignKey("store.id"), index=True)
     role: Mapped[Role] = mapped_column()
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)

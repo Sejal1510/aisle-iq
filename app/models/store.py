@@ -2,9 +2,8 @@ from datetime import datetime
 
 from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
 
-from app.db.base import Base
+from app.db.base import Base, utcnow
 from app.models.enums import ZoneType
 
 
@@ -20,7 +19,7 @@ class Organization(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     stores: Mapped[list["Store"]] = relationship(back_populates="organization")
 
@@ -40,7 +39,7 @@ class Store(Base):
     organization_id: Mapped[str | None] = mapped_column(ForeignKey("organization.id"), index=True)
     name: Mapped[str | None] = mapped_column(String)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     organization: Mapped["Organization"] = relationship(back_populates="stores")
     cameras: Mapped[list["Camera"]] = relationship(back_populates="store", cascade="all, delete-orphan")
@@ -79,7 +78,7 @@ class Camera(Base):
     confidence_threshold: Mapped[float | None] = mapped_column(Float)
     queue_completion_seconds: Mapped[int | None] = mapped_column(Integer)
     queue_abandonment_seconds: Mapped[int | None] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     store: Mapped["Store"] = relationship(back_populates="cameras")
 
@@ -105,6 +104,6 @@ class Zone(Base):
     is_revenue_zone: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     map_polygon_json: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     store: Mapped["Store"] = relationship(back_populates="zones")

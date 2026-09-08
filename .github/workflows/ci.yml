@@ -12,6 +12,24 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
+    # P6: a real PostgreSQL 16 instance, used only by the opt-in
+    # tests/test_postgres_migration.py and tests/test_postgres_smoke.py (see
+    # docs/CHOICES.md) -- the rest of the suite stays on SQLite and does not
+    # touch this service at all.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aisleiq
+          POSTGRES_USER: aisleiq
+          POSTGRES_PASSWORD: aisleiq
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aisleiq -d aisleiq"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -22,10 +40,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --only-binary :all: -r requirements.txt
+          pip install --only-binary :all: -r requirements-dev.txt
 
       - name: Lint (ruff)
         run: ruff check .
 
       - name: Test (pytest)
+        env:
+          AISLEIQ_TEST_POSTGRES_URL: postgresql+psycopg://aisleiq:aisleiq@localhost:5432/aisleiq
         run: pytest -q

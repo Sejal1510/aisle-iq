@@ -11,9 +11,8 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
 
-from app.db.base import Base
+from app.db.base import Base, utcnow
 from app.models.enums import EventType
 
 
@@ -48,7 +47,7 @@ class Event(Base):
     wait_seconds: Mapped[int | None] = mapped_column(Integer)
     queue_position_at_join: Mapped[int | None] = mapped_column(Integer)
     abandoned: Mapped[bool | None] = mapped_column(Boolean)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     session: Mapped["VisitSession"] = relationship(back_populates="events")
     tracked_entity: Mapped["TrackedEntity"] = relationship(back_populates="events")

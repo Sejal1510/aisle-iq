@@ -3,9 +3,8 @@ from datetime import datetime
 
 from sqlalchemy import Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
 
-from app.db.base import Base
+from app.db.base import Base, utcnow
 from app.models.enums import CorrelationStatus
 
 
@@ -21,7 +20,7 @@ class PosTransaction(Base):
     order_id: Mapped[str] = mapped_column(String, index=True)
     store_id: Mapped[str] = mapped_column(ForeignKey("store.id"), index=True)
     timestamp: Mapped[datetime] = mapped_column(index=True)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     items: Mapped[list["PosTransactionItem"]] = relationship(back_populates="transaction", cascade="all, delete-orphan")
     correlations: Mapped[list["TransactionCorrelation"]] = relationship(back_populates="transaction", cascade="all, delete-orphan")
@@ -51,7 +50,7 @@ class TransactionCorrelation(Base):
     confidence_score: Mapped[float] = mapped_column(Float)
     correlation_method: Mapped[str] = mapped_column(String)
     explanation: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     transaction: Mapped["PosTransaction"] = relationship(back_populates="correlations")
     session: Mapped["VisitSession"] = relationship(back_populates="correlations")

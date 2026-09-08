@@ -21,9 +21,9 @@ from app.services.occupancy_service import to_naive
 def bucket_boundaries(start: datetime, end: datetime, bucket_minutes: int) -> list[datetime]:
     """Shared bucketing helper: [start, start+bucket, ..., last boundary < end].
     Bucketing is done in Python (not SQL date-trunc) to stay dialect-neutral --
-    this system's queries currently only run against SQLite, and P2 explicitly
-    left PostgreSQL unverified; on-read aggregation is deliberately kept
-    simple rather than introducing per-dialect SQL."""
+    this system runs on both SQLite and PostgreSQL (P6 verified the latter),
+    and on-read aggregation is deliberately kept simple rather than
+    introducing per-dialect SQL."""
     if end <= start:
         raise ValueError("end must be after start")
     if bucket_minutes <= 0:

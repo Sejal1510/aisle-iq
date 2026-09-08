@@ -1,3 +1,14 @@
+# Runtime dependencies for the API/dashboard service only (what the Docker
+# image installs -- see Dockerfile). Video/CCTV processing (ultralytics,
+# opencv-python, numpy) and dev/test tooling (ruff, pytest, httpx) are
+# deliberately not here: the running API never imports them (see
+# docs/CHOICES.md's "Dependency Footprint" entry for why), and pulling them in
+# by default cost the Docker image ~2.8GB of unused CUDA/torch packages.
+# Local development: use requirements-dev.txt (adds ruff/pytest/httpx) and/or
+# requirements-video.txt (adds the video-pipeline stack) as needed -- both
+# include this file, so either alone is a complete local dev environment for
+# its purpose.
+
 # Web Framework
 fastapi
 uvicorn[standard]
@@ -18,15 +29,3 @@ bcrypt
 
 # Logging
 structlog
-
-# Linting & Formatting (Development)
-ruff
-
-# Testing (Development)
-pytest
-httpx  # required by fastapi.testclient.TestClient
-
-# CCTV Video Processing
-ultralytics
-opencv-python
-numpy

@@ -53,3 +53,8 @@ def downgrade() -> None:
     op.drop_table('store_access')
     op.drop_index(op.f('ix_user_email'), table_name='user')
     op.drop_table('user')
+
+    # See 853b1b696474's downgrade() for why this is needed: op.drop_table
+    # does not drop the PostgreSQL native enum TYPE that store_access.role
+    # used, which would otherwise break a downgrade-then-upgrade cycle.
+    sa.Enum(name='role').drop(op.get_bind(), checkfirst=True)

@@ -26,7 +26,7 @@ This submission was independently audited after the challenge, and the audit's f
   - **Store-scoped idempotency.** `Event` and `PosTransaction` idempotency keys moved from globally-unique columns to database-level `UniqueConstraint("store_id", ...)`, so two different stores reusing the same source-provided id can never collide. CCTV event families that never carry an explicit `event_id` (entry/exit/reentry/zone/queue events) now get a deterministic synthetic key derived from their identifying fields, so a replay is recognized as a duplicate instead of silently creating a new event.
   - **Store-scoped API-key authorization.** Extends F-05: a valid key now only authorizes requests for the store it was issued to. A single-event submission for a different store returns 403; in a batch, only the mismatched items are rejected, the rest of the batch still processes.
   - **Alembic migrations.** A single initial-schema migration (`alembic/versions/853b1b696474_initial_schema.py`) creates all 13 tables with the same FKs/constraints as the ORM models. `init_db()` still does zero-friction `create_all` in `development`, but every other environment now verifies the database is at the Alembic head revision and fails loudly and specifically if not.
-  - **SQLite for development, PostgreSQL direction for production.** `psycopg[binary]` was added to `requirements.txt` and the migration is written in dialect-neutral SQLAlchemy, but it has only been exercised against SQLite so far -- see Limitations below.
+  - **SQLite for development, PostgreSQL for production (verified in P6).** `psycopg[binary]` was added to `requirements.txt` and the migration is written in dialect-neutral SQLAlchemy; P6 verified both migrations (including the upgrade/downgrade/upgrade cycle) and a set of representative application flows against a real PostgreSQL 16 instance, and fixed the two dialect-dependent issues that surfaced (`created_at` defaults, enum-type cleanup on downgrade) -- see `docs/CHOICES.md` and "Running With Docker Compose (PostgreSQL)" below.
 - **P3 -- live retail intelligence + analytics foundation.** Read-only services layered on the P0-P2 event/data model; no ingestion changes. All metrics are computed on request against the current database state, not pushed or streamed -- see "What 'current' means" below.
   - **What "current" means.** "Current"/"live" metrics (current occupancy, current queue) are evaluated as of **the store's latest ingested event timestamp**, not wall-clock time. This system processes recorded/batch/replayed CCTV and POS data, not a live camera feed, so wall-clock `now()` would make historical or demo data read as permanently empty or stale. A caller can also pass an explicit `as_of` to query any past instant with the same mechanism.
   - **Occupancy.** Count of distinct customers (staff excluded) whose visit session covers a given instant: `entry_time <= as_of < exit_time` (a session with no `exit_time` yet is still occupying). Occupancy counts **distinct visitors**, not visit-session rows -- this matters because out-of-order event delivery can occasionally cause two overlapping session rows for the same person (see Limitations); occupancy is computed so that never produces a double count.
@@ -59,7 +59,7 @@ Sign in at `http://127.0.0.1:8000/dashboard` with that email/password, or via `P
 
 ### Current known limitations (as of the P4.4 update)
 
-- **PostgreSQL is not yet verified.** The Alembic migration and `psycopg[binary]` driver are in place, but nothing has been run against a live PostgreSQL instance yet -- only SQLite, via `tests/test_db_session.py`.
+- **PostgreSQL is verified (P6), SQLite remains the local-dev default.** `tests/test_postgres_migration.py` and `tests/test_postgres_smoke.py` run against a real PostgreSQL 16 instance (opt-in via `AISLEIQ_TEST_POSTGRES_URL`, wired into CI and `docker-compose.yml`'s `db`/`migrate` services); `tests/test_db_session.py` continues to cover the SQLite path used by plain local `uvicorn` runs.
 - **No cross-camera identity merging/ReID.** `IdentityAlias` resolution is deterministic and camera-scoped for `track_id`-based identifiers -- the same physical visitor seen on two different cameras resolves to two different `TrackedEntity` rows, by design for this phase.
 - **Near-duplicate ENTRY events can still inflate footfall.** P2's idempotency dedupes *exact* resubmissions (same source id, or an identical synthetic key), but two near-duplicate observations of the same physical entry with even slightly different timestamps (e.g. tracking jitter re-detecting the same crossing a few frames later) are not deduplicated and will both count.
 - **Current metrics are request-computed, not push/streaming real-time.** Every "current"/"live" P3 endpoint runs its query fresh against the database on each request, evaluated as of the latest ingested event (see "What 'current' means" above) -- there is no background job, cache, or WebSocket/SSE push keeping a value updated between requests.
@@ -84,10 +84,12 @@ An independent product/architecture audit (available in project history) found t
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 python -m pytest
 uvicorn app.main:app --reload
 ```
+
+`requirements-dev.txt` installs the API/dashboard runtime plus linting/testing tools (ruff, pytest, httpx) -- everything the commands above need. It does **not** include the video-processing stack (ultralytics, opencv-python, numpy): those are only needed to run the real CCTV pipeline (see "Demo Walkthrough" below) and live in `requirements-video.txt`, kept separate because the running API never imports them (see `docs/CHOICES.md`'s "Dependency Footprint" entry). The Docker image (`Dockerfile`) installs only the bare `requirements.txt` runtime set.
 
 Open the dashboard at:
 
@@ -96,6 +98,20 @@ http://127.0.0.1:8000/dashboard
 ```
 
 The API health check is available at `/health`, and FastAPI's generated evaluator-friendly API docs are available at `/docs`.
+
+## Running With Docker Compose (PostgreSQL)
+
+The Quickstart above uses SQLite directly on the host -- zero external infrastructure, the right default for fast local iteration. `docker-compose.yml` instead runs the full stack against a real PostgreSQL 16 instance, which is what CI and any real deployment target should be verified against:
+
+```powershell
+docker compose up --build
+```
+
+This starts three services: `db` (PostgreSQL 16, with a persistent named volume), `migrate` (a one-shot `alembic upgrade head` against `db`, then exits), and `api` (only starts once `migrate` has completed successfully). `migrate` and `api` share one built image (`aisleiq-api`) rather than building the identical Dockerfile twice. The API is available at the same `http://127.0.0.1:8000` as the Quickstart path once `docker compose ps` shows `api` healthy.
+
+To point a non-Docker local run at PostgreSQL instead of SQLite, set `DATABASE_URL` to a `postgresql+psycopg://` URL in `.env` -- see `.env.example` for the exact form and a note on why the `+psycopg` driver segment is required.
+
+The Docker image installs only the bare `requirements.txt` (API/dashboard runtime) -- not the video-processing stack or dev/test tooling, neither of which the containerized `api`/`migrate` services ever use. See `docs/CHOICES.md`'s "Dependency Footprint" entry for what that removed and why.
 
 ## Demo Data Flow
 
@@ -203,7 +219,7 @@ The current checked event log validates to 124 events against the project `Event
 ## Evaluator Setup
 
 1. Use Python 3.11 or newer.
-2. Install dependencies with `pip install -r requirements.txt`.
+2. Install dependencies with `pip install -r requirements-dev.txt` (add `-r requirements-video.txt` too if you also want to regenerate `data/generated_cctv_events.jsonl` from source video -- see "Demo Walkthrough" below; the test suite itself doesn't require it).
 3. Run `python -m pytest` to verify ingestion, correlation, analytics API, dashboard static checks, and video event generation tests.
 4. Validate `data/generated_cctv_events.jsonl` with the command above.
 5. Start the local app with `uvicorn app.main:app --reload`.
@@ -281,7 +297,6 @@ Roadmap / design-not-fully-implemented items are explicitly treated as future wo
 
 - Raw-event *replay* workflow (the archive table itself is implemented; replaying it is not).
 - Cross-camera identity merging/ReID (the alias mapping itself is implemented; merging aliases across cameras is not).
-- PostgreSQL verified in a live environment (the migration exists and is dialect-neutral but has only run against SQLite so far).
 - Advanced anomaly detection and streaming dashboard updates.
 
 ## Screenshots
@@ -355,18 +370,17 @@ Repository strengths:
 Remaining limitations:
 
 - Cross-camera ReID is not implemented; it is documented as roadmap because safe stitching needs calibrated topology and confidence modeling.
-- Raw-event replay (the archive itself is implemented) and live PostgreSQL verification (the migration exists but has only run against SQLite) are roadmap items.
+- Raw-event replay (the archive itself is implemented) is a roadmap item. Live PostgreSQL verification is complete as of P6.
 - The dashboard is static and polling-based, suitable for challenge evaluation but not a full production command center.
 
 Known tradeoffs:
 
-- SQLite keeps evaluation simple but is not the target for high-concurrency production ingestion.
+- SQLite keeps local evaluation simple; PostgreSQL (verified in P6) is the target for real deployment and high-concurrency production ingestion.
 - Deterministic heuristics are explainable and testable, but less flexible than trained models for staff/group/ReID classification.
 - Demo POS data enables dashboard revenue evaluation but is clearly separate from original challenge observations.
 
 Production roadmap:
 
-- Verify the Alembic migration against a live PostgreSQL instance and deploy against it (migrations themselves are implemented as of the P2 update above).
 - Add a raw-event replay workflow on top of the existing `RawEvent` archive.
 - Add calibrated camera topology and optional confidence-scored cross-camera identity stitching (ReID) on top of the existing `IdentityAlias` model.
 - Add richer anomaly detection and peak-hour staffing recommendations (trend-aware explainable anomaly detection is implemented as of P4.3).

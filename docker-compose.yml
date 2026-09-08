@@ -1,14 +1,70 @@
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aisleiq
+      POSTGRES_USER: aisleiq
+      POSTGRES_PASSWORD: aisleiq
+      # Pinned explicitly, not relied on implicitly: PostgreSQL's now()/CURRENT_TIMESTAMP
+      # reflects the session's configured timezone, unlike SQLite's which is always UTC.
+      # The app itself no longer depends on this (see app/db/base.py's utcnow()), but
+      # pinning it keeps anything that does read raw DB timestamps (e.g. ad-hoc psql
+      # queries) predictable too.
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aisleiq -d aisleiq"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # One-shot: applies Alembic migrations against `db`, then exits. Kept
+  # separate from `api` rather than folded into its entrypoint/CMD, matching
+  # init_db()'s own design (app/db/session.py) that treats "run migrations" as
+  # an explicit deploy step outside development, not app-startup magic.
+  #
+  # No `build:` here -- reuses the image `api` builds (see its `image:` key)
+  # rather than building the identical Dockerfile a second time. `docker
+  # compose up --build` builds `api` first (any service declaring `build:`
+  # builds before containers start), so this image already exists locally by
+  # the time `migrate`'s container is created.
+  migrate:
+    image: aisleiq-api
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+psycopg://aisleiq:aisleiq@db:5432/aisleiq
+      ENVIRONMENT: staging
+      # Local-Docker-Compose-only secret (generated once for this file). Not a
+      # real production credential -- any real deployment must set its own via
+      # a real JWT_SECRET_KEY environment value, per .env.example.
+      JWT_SECRET_KEY: gDuRbXpYBD8aPkJDbJ2UVZo5waMtTk7odpM9jYmsrq45I6Fgm3fBudOXWoXxG4cT
+    depends_on:
+      db:
+        condition: service_healthy
+
   api:
     build: .
+    image: aisleiq-api
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: sqlite:///./store_intelligence.db
-      ENVIRONMENT: development
+      DATABASE_URL: postgresql+psycopg://aisleiq:aisleiq@db:5432/aisleiq
+      ENVIRONMENT: staging
+      JWT_SECRET_KEY: gDuRbXpYBD8aPkJDbJ2UVZo5waMtTk7odpM9jYmsrq45I6Fgm3fBudOXWoXxG4cT
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
+
+volumes:
+  postgres_data:

@@ -4,9 +4,8 @@ from typing import Optional
 
 from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
 
-from app.db.base import Base
+from app.db.base import Base, utcnow
 
 
 class RawEvent(Base):
@@ -36,6 +35,6 @@ class RawEvent(Base):
     event_id: Mapped[str | None] = mapped_column(ForeignKey("event.id"), index=True)
     validation_status: Mapped[str] = mapped_column(String, default="accepted", index=True)
     error_message: Mapped[str | None] = mapped_column(Text)
-    received_at: Mapped[datetime] = mapped_column(default=func.now())
+    received_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     event: Mapped[Optional["Event"]] = relationship()

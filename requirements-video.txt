@@ -1,0 +1,13 @@
+# Local development only: the CCTV video-processing pipeline
+# (pipeline/video/detectors.py, pipeline/video/tracking.py -- YOLOv8 person
+# detection + ByteTrack). Not installed by the Docker image (see Dockerfile):
+# the API/dashboard never imports these, and the running app never invokes
+# the video pipeline (it's a standalone CLI tool -- see README's "Demo
+# Walkthrough"). Install this before running `python -m
+# pipeline.video.process_videos`.
+-r requirements.txt
+
+# CCTV Video Processing
+ultralytics
+opencv-python
+numpy

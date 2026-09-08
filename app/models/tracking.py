@@ -3,9 +3,8 @@ from datetime import datetime
 
 from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
 
-from app.db.base import Base
+from app.db.base import Base, utcnow
 from app.models.enums import SessionStatus
 
 
@@ -28,7 +27,7 @@ class TrackedEntity(Base):
     staff_inference_reason: Mapped[str | None] = mapped_column(String)
     group_id: Mapped[str | None] = mapped_column(String)
     group_size: Mapped[int | None] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     sessions: Mapped[list["VisitSession"]] = relationship(back_populates="tracked_entity", cascade="all, delete-orphan")
     events: Mapped[list["Event"]] = relationship(back_populates="tracked_entity", cascade="all, delete-orphan")
@@ -65,7 +64,7 @@ class IdentityAlias(Base):
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     first_seen_at: Mapped[datetime] = mapped_column()
     last_seen_at: Mapped[datetime] = mapped_column()
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     tracked_entity: Mapped["TrackedEntity"] = relationship(back_populates="aliases")
 
@@ -91,7 +90,7 @@ class VisitSession(Base):
     exit_time: Mapped[datetime | None] = mapped_column()
     dwell_seconds: Mapped[int | None] = mapped_column(Integer)
     session_status: Mapped[SessionStatus] = mapped_column(default=SessionStatus.IN_PROGRESS)
-    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     tracked_entity: Mapped["TrackedEntity"] = relationship(back_populates="sessions")
     events: Mapped[list["Event"]] = relationship(back_populates="session", cascade="all, delete-orphan")
