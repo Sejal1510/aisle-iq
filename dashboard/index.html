@@ -42,6 +42,7 @@
           <button class="tab-button" type="button" data-view="insights">Insights</button>
           <button class="tab-button" type="button" data-view="comparison">Store Comparison</button>
           <button class="tab-button" type="button" data-view="live-analytics">Live Analytics</button>
+          <button class="tab-button" type="button" data-view="zone-map">Zone Map</button>
         </nav>
       </aside>
 
@@ -265,6 +266,41 @@
               <div class="comparison-grid" id="period-comparison-grid"></div>
             </section>
           </div>
+        </section>
+
+        <section class="view" id="zone-map-view" data-view-panel="zone-map">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Zone Activity Map</h3>
+                <p>Relative visitor activity per configured zone, shaded on your store map. This shows aggregated zone-level activity, not the exact position of individual customers.</p>
+              </div>
+              <div class="zone-map-metric">
+                <label for="zone-map-metric">Shade by</label>
+                <select id="zone-map-metric">
+                  <option value="visits" selected>Visits</option>
+                  <option value="dwell">Dwell Time</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="zone-map-empty" id="zone-map-empty" hidden>
+              <p id="zone-map-empty-message">No store map configured yet.</p>
+            </div>
+
+            <div class="zone-map-layout" id="zone-map-content">
+              <div class="zone-map-stage" id="zone-map-stage">
+                <div class="heatmap-empty">No zone map data available.</div>
+              </div>
+              <div class="zone-map-side">
+                <div class="panel-header">
+                  <h4>Zone Ranking</h4>
+                  <span id="zone-map-count">0 zones</span>
+                </div>
+                <div class="zone-map-list" id="zone-map-list"></div>
+              </div>
+            </div>
+          </section>
         </section>
       </main>
     </div>

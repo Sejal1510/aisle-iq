@@ -16,6 +16,9 @@ const state = {
   // 8 requests. analyticsRange is only meaningful once loaded.
   liveAnalyticsLoaded: false,
   analyticsRange: null,
+  // Zone Map (P8) is loaded lazily the first time its tab opens, same pattern
+  // as Live Analytics above.
+  zoneMapLoaded: false,
 };
 
 const RANGE_PRESET_HOURS = { "24h": 24, "3d": 72, "7d": 168 };
@@ -79,6 +82,13 @@ const elements = {
   whatChangedBanner: document.querySelector("#what-changed-banner"),
   alertsSummary: document.querySelector("#alerts-summary"),
   alertsList: document.querySelector("#alerts-list"),
+  zoneMapMetric: document.querySelector("#zone-map-metric"),
+  zoneMapEmpty: document.querySelector("#zone-map-empty"),
+  zoneMapEmptyMessage: document.querySelector("#zone-map-empty-message"),
+  zoneMapContent: document.querySelector("#zone-map-content"),
+  zoneMapStage: document.querySelector("#zone-map-stage"),
+  zoneMapCount: document.querySelector("#zone-map-count"),
+  zoneMapList: document.querySelector("#zone-map-list"),
 };
 
 const MAX_VISIBLE_ALERTS = 4;
@@ -114,6 +124,7 @@ elements.storeForm.addEventListener("submit", (event) => {
   }
   loadDashboard();
   refreshLiveAnalyticsIfLoaded();
+  refreshZoneMapIfLoaded();
 });
 
 elements.rangePreset.addEventListener("change", () => {
@@ -123,6 +134,10 @@ elements.rangePreset.addEventListener("change", () => {
   if (!isCustom) {
     loadLiveAnalytics();
   }
+});
+
+elements.zoneMapMetric.addEventListener("change", () => {
+  loadZoneMap();
 });
 
 elements.rangeApply.addEventListener("click", () => {
@@ -179,6 +194,7 @@ function showAppShell() {
   elements.appShell.hidden = false;
   loadDashboard();
   refreshLiveAnalyticsIfLoaded();
+  refreshZoneMapIfLoaded();
 }
 
 if (state.authToken) {
@@ -233,7 +249,7 @@ async function fetchJson(path) {
 }
 
 function activateView(viewName) {
-  const titles = { comparison: "Store Comparison", "live-analytics": "Live Analytics" };
+  const titles = { comparison: "Store Comparison", "live-analytics": "Live Analytics", "zone-map": "Zone Map" };
   elements.pageTitle.textContent = titles[viewName] || titleCase(viewName);
   elements.tabButtons.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === viewName);
@@ -243,6 +259,9 @@ function activateView(viewName) {
   });
   if (viewName === "live-analytics") {
     ensureLiveAnalyticsLoaded();
+  }
+  if (viewName === "zone-map") {
+    ensureZoneMapLoaded();
   }
 }
 
@@ -769,6 +788,105 @@ function renderWhatChanged(response) {
 
   elements.whatChangedBanner.hidden = false;
   elements.whatChangedBanner.textContent = strongest.message;
+}
+
+// ---------------------------------------------------------------------------
+// Zone Activity Map (P8) -- shades each configured zone's map outline by a
+// real, existing zone-dwell aggregate (visits or dwell time). Deliberately
+// zone-level, not a per-point/per-visitor position: see
+// docs/DESIGN.md's "Zone-Level Spatial Intelligence, Not Point Projection
+// (P8)" section for why. Loaded lazily the first time its tab opens, same
+// pattern as Live Analytics above.
+// ---------------------------------------------------------------------------
+
+const ZONE_MAP_COLOR_EMPTY = "rgba(150, 140, 120, 0.18)";
+
+function ensureZoneMapLoaded() {
+  if (state.zoneMapLoaded) {
+    return;
+  }
+  state.zoneMapLoaded = true;
+  loadZoneMap();
+}
+
+function refreshZoneMapIfLoaded() {
+  if (state.zoneMapLoaded) {
+    loadZoneMap();
+  }
+}
+
+async function loadZoneMap() {
+  try {
+    const metric = elements.zoneMapMetric.value;
+    const response = await fetchJson(`/stores/${state.storeId}/spatial-intensity?metric=${encodeURIComponent(metric)}`);
+    renderZoneMap(response);
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+function renderZoneMap(response) {
+  const zonesWithPolygon = (response.zones || []).filter((zone) => zone.map_polygon && zone.map_polygon.length >= 3);
+
+  if (!response.layout_image_url) {
+    showZoneMapEmpty("No store map has been configured for this store yet.");
+    return;
+  }
+  if (!zonesWithPolygon.length) {
+    showZoneMapEmpty("This store's map is configured, but no zones have a drawn outline yet.");
+    return;
+  }
+
+  elements.zoneMapEmpty.hidden = true;
+  elements.zoneMapContent.hidden = false;
+
+  const polygonMarkup = zonesWithPolygon
+    .map((zone) => {
+      const points = zone.map_polygon.map(([x, y]) => `${x},${y}`).join(" ");
+      const color = zoneIntensityColor(zone.intensity);
+      const label = `${zone.name}: ${formatNumber(zone.visits)} visits, ${formatDuration(zone.average_dwell_seconds)} avg dwell (rank #${zone.rank})`;
+      return `<polygon class="zone-map-polygon" points="${points}" fill="${color}"><title>${escapeHtml(label)}</title></polygon>`;
+    })
+    .join("");
+
+  elements.zoneMapStage.innerHTML = `
+    <img src="${escapeHtml(response.layout_image_url)}" alt="${escapeHtml(response.store_id)} store layout">
+    <svg class="zone-map-svg" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">${polygonMarkup}</svg>
+  `;
+
+  const ranked = [...zonesWithPolygon].sort((a, b) => a.rank - b.rank);
+  elements.zoneMapCount.textContent = `${formatNumber(ranked.length)} ${ranked.length === 1 ? "zone" : "zones"}`;
+  elements.zoneMapList.innerHTML = ranked
+    .map((zone) => {
+      const valueText =
+        response.metric === "dwell"
+          ? `${formatDuration(zone.total_dwell_seconds)} total`
+          : `${formatNumber(zone.visits)} visits`;
+      return `
+        <article class="zone-map-list-item">
+          <span class="zone-map-list-swatch" style="background:${zoneIntensityColor(zone.intensity)}"></span>
+          <span class="zone-map-list-name">#${zone.rank} ${escapeHtml(zone.name)}</span>
+          <span class="zone-map-list-value">${valueText}</span>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function showZoneMapEmpty(message) {
+  elements.zoneMapEmpty.hidden = false;
+  elements.zoneMapEmptyMessage.textContent = message;
+  elements.zoneMapContent.hidden = true;
+}
+
+function zoneIntensityColor(intensity) {
+  if (!intensity) {
+    return ZONE_MAP_COLOR_EMPTY;
+  }
+  const clamped = Math.max(0, Math.min(1, intensity));
+  const opacity = 0.22 + clamped * 0.6;
+  const hue = 44 - clamped * 34;
+  return `hsla(${hue.toFixed(0)}, 74%, 48%, ${opacity.toFixed(2)})`;
 }
 
 function formatBucketLabel(isoString) {

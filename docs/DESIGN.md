@@ -133,6 +133,18 @@ Status: implemented. Replaces the pre-P7 state, in which ST1001/ST1002's cameras
 - `pipeline.migrate_legacy_store_config` is a one-off, throwaway script (not a general onboarding tool) that wrote ST1001/ST1002's former hardcoded configuration into this model; `tests/test_legacy_config_migration.py` checks the migrated configuration reconstructs byte-for-byte-equivalent polygons/lines to the deleted literals.
 - Onboarding (creating a store, uploading its map, drawing zones, registering cameras, and defining coverage) happens through `/stores` + `/stores/{store_id}/config/...` (`app/api/onboarding.py`) or the minimal `onboarding/` UI on top of it -- never by editing Python source. The store-agnostic proof of this is `tests/test_store_agnostic_onboarding.py`, which onboards a fictitious non-Purplle "Northwind Electronics" store purely through this API and runs the unmodified event-ingestion/analytics stack against it.
 
+## Zone-Level Spatial Intelligence, Not Point Projection (P8)
+
+Status: implemented (`app/services/spatial_intelligence_service.py`, `GET /stores/{store_id}/spatial-config`, `GET /stores/{store_id}/spatial-intensity`). Bridges the P7 spatial configuration layer with the existing, unmodified analytics engine to answer: *does this store's configured map, zones, and real event data support a genuine physical-space visualization?* At the zone level, yes; at the individual-event/point level, no -- and P8 does not pretend otherwise.
+
+**Why not project individual events onto the map.** `Event.hotspot_x`/`hotspot_y` (and `CameraCoverage`'s polygon) are in **that camera's own frame-normalized coordinates** (`TrackSnapshot.normalized_footpoint` = footpoint / frame size -- see `pipeline/video/tracking.py`). `Zone.map_polygon_json` is a **separate, independently-drawn** map-image-normalized outline (see "Spatial Configuration (P7)" above) -- nothing in this codebase transforms one into the other. Before P8, `HeatmapService`'s point-based heatmap (still present, unchanged -- see below) implicitly treated the two as interchangeable, which only produced a plausible-looking result because `pipeline/migrate_legacy_store_config.py` happened to hardcode the *same* normalized rectangle for both a zone's map outline and its camera's coverage geometry for ST1001/ST1002. That coincidence breaks the moment a zone has more than one covering camera -- which is exactly ST1001's real configuration (`ST1001_CAM_ZONE_1` and `ST1001_CAM_ZONE_2` both cover `ST1001_MAIN_ZONE`; each camera's own frame-normalized coordinates for "the same physical spot" generally differ). A correction to this document: step 7 of "Detection And Tracking Architecture" above previously claimed footpoints are "projected into layout coordinates where calibration exists" -- no such stage has ever existed in `pipeline/video/tracking.py` or `events.py`; that was aspirational text, not implemented behavior.
+
+**What P8 trusts instead: `zone_id` + `Zone.map_polygon_json`.** Zone membership is already a reliable, same-camera-frame point-in-polygon test that was always correct (P7 only moved where its input geometry comes from). `AnalyticsService.zone_dwell_metrics` already aggregates real visit/dwell counts per `zone_id`, unchanged by P8. `SpatialIntelligenceService.get_zone_intensity` joins that existing aggregate with each zone's existing `map_polygon_json` and returns a zone-keyed (not coordinate-keyed) structure, so a UI can shade each zone's drawn outline by its real activity -- without claiming to know where inside that zone any individual visitor stood.
+
+**Deliberately out of scope for P8, and why:** camera calibration, homography, or any per-event/continuous camera-to-map coordinate transform. The available inputs (one or two zone cameras per store, no calibration data, no shared reference points between camera and map images) do not support this honestly; attempting an approximation (e.g., "reuse the camera-frame footpoint as if it were a map position when a zone has exactly one covering camera") was considered and rejected for P8 as exactly the kind of implicit, undocumented assumption this section is correcting. If a future phase wants continuous point placement, it should be a separate, explicitly operator-confirmed opt-in (e.g., a human explicitly marking "this camera's coverage polygon is intended to approximate this zone's map region"), not an automatic default.
+
+**`HeatmapService`'s existing point-based heatmap is unchanged.** P8 is additive -- it does not rewrite, deprecate, or fix `GET /stores/{store_id}/heatmap`'s existing per-point behavior described above, including its camera-frame/map-frame conflation. That remains a known, now-documented limitation rather than something P8 silently corrected.
+
 ## Identity Mapping Strategy
 
 Status: roadmap, with partial deterministic behavior in current ingestion/session handling.
@@ -315,8 +327,8 @@ Stages:
 4. Filter detections by class and confidence.
 5. Feed detections into ByteTrack.
 6. Emit track states with bounding boxes, track IDs, timestamps, and confidence.
-7. Project footpoints/hotspots into layout coordinates where calibration exists.
-8. Evaluate entrance lines, zone polygons, and billing queue polygons.
+7. Normalize each footpoint to `[0,1]` within its own camera frame (`TrackSnapshot.normalized_footpoint`) -- this is *not* a projection into map/layout coordinates; see "Spatial Configuration (P7)" and "Zone-Level Spatial Intelligence, Not Point Projection (P8)" below for why no such projection is implemented, and a correction to what this step previously (inaccurately) claimed.
+8. Evaluate entrance lines, zone polygons, and billing queue polygons -- a same-camera-frame test against `CameraCoverage` geometry (see below), independent of the layout/map image entirely.
 9. Generate normalized event payloads.
 10. Persist events through the same ingestion service/API path as sample events.
 

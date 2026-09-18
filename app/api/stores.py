@@ -28,6 +28,11 @@ from app.schemas.live_analytics import (
     QueueMetricsResponse,
 )
 from app.schemas.path_analytics import StorePathAnalyticsResponse
+from app.schemas.spatial_intelligence import (
+    StoreSpatialConfigResponse,
+    StoreZoneIntensityResponse,
+    ZoneIntensityMetric,
+)
 from app.services.analytics_service import AnalyticsService
 from app.services.anomaly_service import AnomalyService
 from app.services.comparison_service import ComparisonService
@@ -37,6 +42,7 @@ from app.services.occupancy_service import OccupancyService
 from app.services.path_analytics_service import PathAnalyticsService
 from app.services.peak_hour_service import PeakHourService
 from app.services.queue_service import QueueService
+from app.services.spatial_intelligence_service import SpatialIntelligenceService
 from app.services.time_series_service import TimeSeriesService
 
 router = APIRouter()
@@ -79,6 +85,31 @@ def get_store_heatmap(
     store_id: str, db: Session = Depends(get_db), access: StoreAccess = _read_access
 ) -> StoreHeatmapResponse:
     return HeatmapService(db).get_store_heatmap(store_id)
+
+
+@router.get("/stores/{store_id}/spatial-config", response_model=StoreSpatialConfigResponse)
+def get_store_spatial_config(
+    store_id: str, db: Session = Depends(get_db), access: StoreAccess = _read_access
+) -> StoreSpatialConfigResponse:
+    """P8: what this store's spatial onboarding (P7) currently has configured
+    -- the active map (if any) and each zone's map outline and covering
+    camera(s). No activity data; see /spatial-intensity for that."""
+    return SpatialIntelligenceService(db).get_spatial_config(store_id)
+
+
+@router.get("/stores/{store_id}/spatial-intensity", response_model=StoreZoneIntensityResponse)
+def get_store_spatial_intensity(
+    store_id: str,
+    metric: ZoneIntensityMetric = Query("visits"),
+    db: Session = Depends(get_db),
+    access: StoreAccess = _read_access,
+) -> StoreZoneIntensityResponse:
+    """P8: zone-level activity intensity for map rendering, reusing
+    AnalyticsService.zone_dwell_metrics unchanged -- no new event-processing
+    logic. Deliberately zone-keyed, not coordinate-keyed: see
+    SpatialIntelligenceService's docstring for why this project does not
+    attempt per-event map-coordinate projection."""
+    return _run_ranged(lambda: SpatialIntelligenceService(db).get_zone_intensity(store_id, metric=metric))
 
 
 @router.get("/stores/{store_id}/anomalies", response_model=StoreAnomaliesResponse)
