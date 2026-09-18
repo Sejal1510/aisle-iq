@@ -47,6 +47,8 @@ class Event(Base):
     wait_seconds: Mapped[int | None] = mapped_column(Integer)
     queue_position_at_join: Mapped[int | None] = mapped_column(Integer)
     abandoned: Mapped[bool | None] = mapped_column(Boolean)
+    is_replay: Mapped[bool] = mapped_column(Boolean, default=False)
+    replay_job_id: Mapped[str | None] = mapped_column(ForeignKey("replay_job.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     session: Mapped["VisitSession"] = relationship(back_populates="events")

@@ -16,6 +16,7 @@ from structlog.contextvars import bind_contextvars, clear_contextvars
 from app.api import auth as auth_module
 from app.api import events as events_module
 from app.api import onboarding as onboarding_module
+from app.api import replay as replay_module
 from app.api import stores as stores_module
 from app.core.config import get_settings
 from app.core.logging import setup_logging
@@ -86,6 +87,15 @@ app.include_router(
 app.include_router(
     onboarding_module.router,
     tags=["onboarding"]
+)
+app.include_router(
+    replay_module.router,
+    prefix="/api/v1",
+    tags=["replay"]
+)
+app.include_router(
+    replay_module.router,
+    tags=["replay"]
 )
 app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
 ONBOARDING_DIR = PROJECT_ROOT / "onboarding"

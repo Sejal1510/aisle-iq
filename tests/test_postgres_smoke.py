@@ -193,3 +193,52 @@ def test_role_gated_analytics_route_against_postgres(db_session: Session, client
     )
 
     assert response.status_code == 200
+
+
+def test_replay_workflow_over_http_against_postgres(db_session: Session, client: TestClient) -> None:
+    """Exercises the replay feature's own dialect-sensitive surface against a
+    real PostgreSQL connection: RawEvent.store_id (a nullable column added to
+    an existing table) and the native replaysourcetype/replaystatus enum
+    columns on the new replay_job table."""
+    db_session.add(Store(id="ST_PG_REPLAY", name=None))
+    db_session.flush()
+    _row, raw_key = create_api_key(db_session, "ST_PG_REPLAY")
+    user = create_user(db_session, email="pg-replay-manager@example.com", raw_password="pw")
+    db_session.commit()
+    grant_store_access(db_session, user.id, "ST_PG_REPLAY", Role.MANAGER)
+    db_session.commit()
+    token, _ = create_access_token(user.id)
+
+    ingest_response = client.post(
+        "/events/",
+        json={
+            "event_id": "evt-pg-replay-1",
+            "event_type": "entry",
+            "id_token": "ID_PG_REPLAY_1",
+            "store_code": "ST_PG_REPLAY",
+            "camera_id": "CAM_ENTRY_1",
+            "event_timestamp": "2026-06-01T09:00:00",
+        },
+        headers={"X-API-Key": raw_key},
+    )
+    assert ingest_response.status_code == 202
+
+    replay_response = client.post(
+        "/stores/ST_PG_REPLAY/replay",
+        json={"source_type": "raw_event_archive"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert replay_response.status_code == 201
+    body = replay_response.json()
+    assert body["status"] == "completed"
+    assert body["total_events"] == 1
+    assert body["duplicate_events"] == 1
+    assert body["accepted_events"] == 0
+
+    status_response = client.get(
+        f"/stores/ST_PG_REPLAY/replay/{body['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "completed"

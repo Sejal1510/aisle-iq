@@ -37,7 +37,9 @@ class EventIngestionService:
         self.db = db
         self.reference_data = ReferenceDataService(db)
 
-    def process_event(self, payload: EventPayload, *, run_inference: bool = True) -> Event:
+    def process_event(
+        self, payload: EventPayload, *, run_inference: bool = True, replay_job_id: str | None = None
+    ) -> Event:
         """Persist a single normalized event.
 
         ``run_inference`` controls whether staff/group inference runs synchronously
@@ -46,6 +48,13 @@ class EventIngestionService:
         offline JSONL importer) pass ``run_inference=False`` and instead call
         ``VisitorInferenceService.infer_store`` once after the whole batch, so a
         batch of N events triggers one store-history rescan instead of N.
+
+        ``replay_job_id`` is set by ``ReplayService`` (never by live ingestion) --
+        it tags the ``RawEvent`` receipt this call writes, and, if this call
+        creates a genuinely new ``Event`` (not a duplicate of one already
+        persisted), that new ``Event`` too. A replay that only rediscovers
+        already-processed events leaves their ``is_replay``/``replay_job_id``
+        untouched -- provenance is set once, at first creation, never rewritten.
         """
         logger.info("processing_event", event_type=payload.event_type)
 
@@ -160,7 +169,13 @@ class EventIngestionService:
         ).scalar_one_or_none()
         if existing_event is not None:
             logger.info("duplicate_event_ignored", event_id=source_event_id, store_id=store_id)
-            self._record_raw_event(payload, event_id=existing_event.id, validation_status="duplicate")
+            self._record_raw_event(
+                payload,
+                store_id=store_id,
+                event_id=existing_event.id,
+                validation_status="duplicate",
+                replay_job_id=replay_job_id,
+            )
             return existing_event
 
         # 4. Resolve (not reuse-as-primary-key) the canonical visitor identity.
@@ -256,9 +271,17 @@ class EventIngestionService:
             wait_seconds=wait_seconds,
             queue_position_at_join=queue_position_at_join,
             abandoned=abandoned,
+            is_replay=replay_job_id is not None,
+            replay_job_id=replay_job_id,
         )
         self.db.add(new_event)
-        self._record_raw_event(payload, event_id=event_id_value, validation_status="accepted")
+        self._record_raw_event(
+            payload,
+            store_id=store_id,
+            event_id=event_id_value,
+            validation_status="accepted",
+            replay_job_id=replay_job_id,
+        )
 
         # 7. Close Session on Exit
         if db_event_type == EventType.EXIT:
@@ -380,14 +403,24 @@ class EventIngestionService:
         self.db.flush()
         return entity
 
-    def _record_raw_event(self, payload: EventPayload, *, event_id: str | None, validation_status: str) -> None:
+    def _record_raw_event(
+        self,
+        payload: EventPayload,
+        *,
+        store_id: str,
+        event_id: str | None,
+        validation_status: str,
+        replay_job_id: str | None = None,
+    ) -> None:
         self.db.add(
             RawEvent(
                 source=type(payload).__name__,
                 source_event_id=getattr(payload, "event_id", None),
+                store_id=store_id,
                 payload_json=payload.model_dump_json(),
                 event_id=event_id,
                 validation_status=validation_status,
+                replay_job_id=replay_job_id,
             )
         )
 
@@ -430,6 +463,26 @@ class EventIngestionService:
             "zone_id": payload.zone_id,
             "event_type": event_type_map[payload.event_type],
         }
+
+
+def event_payload_store_and_timestamp(payload: EventPayload) -> tuple[str, datetime]:
+    """Return ``(store_id, timestamp)`` for any ``EventPayload`` variant,
+    without running the rest of ``process_event``'s normalization.
+
+    Used by ``ReplayService`` to sort/filter raw payloads by their own
+    historical timestamp *before* touching the database -- see
+    ``process_event``'s step 1 for the (more complete) per-family field
+    mapping this mirrors just the two fields of.
+    """
+    if isinstance(payload, CanonicalEvent):
+        return payload.store_id, payload.timestamp
+    if isinstance(payload, (EntryEvent, ExitEvent, ReentryEvent)):
+        return payload.store_code, payload.event_timestamp
+    if isinstance(payload, (ZoneEnteredEvent, ZoneExitedEvent)):
+        return payload.store_id, payload.event_time
+    if isinstance(payload, (QueueCompletedEvent, QueueAbandonedEvent)):
+        return payload.store_id, payload.queue_exit_ts
+    raise ValueError(f"Unsupported event payload type: {type(payload).__name__}")
 
 
 def _parse_datetime(value):

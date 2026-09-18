@@ -89,6 +89,20 @@ const elements = {
   zoneMapStage: document.querySelector("#zone-map-stage"),
   zoneMapCount: document.querySelector("#zone-map-count"),
   zoneMapList: document.querySelector("#zone-map-list"),
+  replayForm: document.querySelector("#replay-form"),
+  replaySourceType: document.querySelector("#replay-source-type"),
+  replayDatasetField: document.querySelector("#replay-dataset-field"),
+  replayDataset: document.querySelector("#replay-dataset"),
+  replayStart: document.querySelector("#replay-start"),
+  replayEnd: document.querySelector("#replay-end"),
+  replayRunButton: document.querySelector("#replay-run"),
+  replayError: document.querySelector("#replay-error"),
+  replayResultPanel: document.querySelector("#replay-result-panel"),
+  replayResultStatus: document.querySelector("#replay-result-status"),
+  replayResultKpis: document.querySelector("#replay-result-kpis"),
+  replayResultErrors: document.querySelector("#replay-result-errors"),
+  replayJobsCount: document.querySelector("#replay-jobs-count"),
+  replayJobsBody: document.querySelector("#replay-jobs-body"),
 };
 
 const MAX_VISIBLE_ALERTS = 4;
@@ -138,6 +152,15 @@ elements.rangePreset.addEventListener("change", () => {
 
 elements.zoneMapMetric.addEventListener("change", () => {
   loadZoneMap();
+});
+
+elements.replaySourceType.addEventListener("change", () => {
+  elements.replayDatasetField.hidden = elements.replaySourceType.value !== "jsonl_file";
+});
+
+elements.replayForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  runReplay();
 });
 
 elements.rangeApply.addEventListener("click", () => {
@@ -248,8 +271,31 @@ async function fetchJson(path) {
   return response.json();
 }
 
+async function postJson(path, body) {
+  const headers = { Accept: "application/json", "Content-Type": "application/json" };
+  if (state.authToken) {
+    headers.Authorization = `Bearer ${state.authToken}`;
+  }
+  const response = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
+  if (response.status === 401) {
+    showLoginGate();
+    throw new Error("Session expired. Please sign in again.");
+  }
+  if (!response.ok) {
+    let message = `Request failed: ${response.status}`;
+    try {
+      const errorBody = await response.json();
+      message = errorBody.detail || errorBody.message || message;
+    } catch {
+      // response body wasn't JSON -- keep the generic message
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
 function activateView(viewName) {
-  const titles = { comparison: "Store Comparison", "live-analytics": "Live Analytics", "zone-map": "Zone Map" };
+  const titles = { comparison: "Store Comparison", "live-analytics": "Live Analytics", "zone-map": "Zone Map", replay: "Replay" };
   elements.pageTitle.textContent = titles[viewName] || titleCase(viewName);
   elements.tabButtons.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === viewName);
@@ -262,6 +308,9 @@ function activateView(viewName) {
   }
   if (viewName === "zone-map") {
     ensureZoneMapLoaded();
+  }
+  if (viewName === "replay") {
+    loadReplayJobs();
   }
 }
 
@@ -887,6 +936,115 @@ function zoneIntensityColor(intensity) {
   const opacity = 0.22 + clamped * 0.6;
   const hue = 44 - clamped * 34;
   return `hsla(${hue.toFixed(0)}, 74%, 48%, ${opacity.toFixed(2)})`;
+}
+
+// ---------------------------------------------------------------------------
+// Raw-event replay -- runs synchronously (this project has no background
+// task runner) so submitting the form already returns the finished job;
+// "Recent Replay Jobs" below is for looking up past runs, not polling.
+// ---------------------------------------------------------------------------
+
+const REPLAY_STATUS_LABELS = {
+  completed: "Completed",
+  partial: "Partial",
+  failed: "Failed",
+  running: "Running",
+};
+
+async function runReplay() {
+  elements.replayError.hidden = true;
+  elements.replayRunButton.disabled = true;
+  elements.replayRunButton.textContent = "Running…";
+
+  const sourceType = elements.replaySourceType.value;
+  const body = { source_type: sourceType };
+  if (sourceType === "jsonl_file") {
+    body.source_ref = elements.replayDataset.value.trim();
+  }
+  if (elements.replayStart.value) {
+    body.range_start = new Date(elements.replayStart.value).toISOString();
+  }
+  if (elements.replayEnd.value) {
+    body.range_end = new Date(elements.replayEnd.value).toISOString();
+  }
+
+  try {
+    const job = await postJson(`/stores/${state.storeId}/replay`, body);
+    renderReplayResult(job);
+    await loadReplayJobs();
+  } catch (error) {
+    elements.replayError.hidden = false;
+    elements.replayError.textContent = error.message;
+  } finally {
+    elements.replayRunButton.disabled = false;
+    elements.replayRunButton.textContent = "Run Replay";
+  }
+}
+
+function renderReplayResult(job) {
+  elements.replayResultPanel.hidden = false;
+  elements.replayResultStatus.textContent = REPLAY_STATUS_LABELS[job.status] || job.status;
+  elements.replayResultKpis.innerHTML = `
+    <article class="kpi-card">
+      <span>Total Candidates</span>
+      <strong>${formatNumber(job.total_events)}</strong>
+    </article>
+    <article class="kpi-card">
+      <span>Accepted</span>
+      <strong>${formatNumber(job.accepted_events)}</strong>
+      <small>Newly created by this replay</small>
+    </article>
+    <article class="kpi-card">
+      <span>Duplicate</span>
+      <strong>${formatNumber(job.duplicate_events)}</strong>
+      <small>Already processed -- no change</small>
+    </article>
+    <article class="kpi-card">
+      <span>Failed</span>
+      <strong>${formatNumber(job.failed_events)}</strong>
+    </article>
+  `;
+
+  if (job.error_message) {
+    elements.replayResultErrors.innerHTML = `<p class="replay-error-message">${escapeHtml(job.error_message)}</p>`;
+  } else if (job.error_details && job.error_details.length) {
+    elements.replayResultErrors.innerHTML = job.error_details
+      .slice(0, 10)
+      .map((detail) => `<p class="replay-error-message">${escapeHtml(detail.item)}: ${escapeHtml(detail.error)}</p>`)
+      .join("");
+  } else {
+    elements.replayResultErrors.innerHTML = "";
+  }
+}
+
+async function loadReplayJobs() {
+  try {
+    const response = await fetchJson(`/stores/${state.storeId}/replay`);
+    const jobs = response.jobs || [];
+    elements.replayJobsCount.textContent = `${formatNumber(jobs.length)} ${jobs.length === 1 ? "job" : "jobs"}`;
+    elements.replayJobsBody.innerHTML = jobs.length
+      ? jobs
+          .map((job) => {
+            return `
+              <tr>
+                <td>${formatDateTime(new Date(job.started_at))}</td>
+                <td>${escapeHtml(job.source_type)}${job.source_ref ? ` (${escapeHtml(job.source_ref)})` : ""}</td>
+                <td>${escapeHtml(REPLAY_STATUS_LABELS[job.status] || job.status)}</td>
+                <td>${formatNumber(job.total_events)}</td>
+                <td>${formatNumber(job.accepted_events)}</td>
+                <td>${formatNumber(job.duplicate_events)}</td>
+                <td>${formatNumber(job.failed_events)}</td>
+              </tr>
+            `;
+          })
+          .join("")
+      : `<tr><td class="empty-row" colspan="7">No replay jobs yet.</td></tr>`;
+  } catch (error) {
+    // A viewer without ANALYST access to this store, or no jobs endpoint
+    // reachable yet -- show the same table empty state rather than
+    // surfacing a raw fetch error on a lazily-loaded tab.
+    elements.replayJobsBody.innerHTML = `<tr><td class="empty-row" colspan="7">Unable to load replay jobs.</td></tr>`;
+  }
 }
 
 function formatBucketLabel(isoString) {

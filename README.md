@@ -79,6 +79,17 @@ An independent product/architecture audit (available in project history) found t
 - **Documentation correction.** `docs/DESIGN.md`'s POS correlation section previously listed zone-dwell history and product/brand-to-zone mapping as correlation inputs; `app/services/correlation_service.py` has never read either. Corrected to describe only what is actually implemented (store match + POS-timestamp-to-queue-exit/session-exit time proximity).
 - **New dependency:** `python-multipart` (small, pure-Python, no transitive dependencies), required for FastAPI's `UploadFile` used by the new map/reference-image upload routes. Added to `requirements.txt`, not the video/ML dependency set.
 
+## Operational Infrastructure -- Raw-Event Replay Workflow (2026-09-12)
+
+Supporting/ops infrastructure, not a numbered product phase -- builds the replay workflow the P0-P2 `RawEvent` archive was always described as enabling but did not yet implement (see the archive's entry above). Replay reuses `EventIngestionService.process_event` directly -- there is no parallel replay-specific ingestion path, so anomaly detection, occupancy/traffic, spatial analytics, and every other downstream service updates automatically from replayed events, the same way it does from live ones.
+
+- **New data model.** `ReplayJob` (`app/models/replay.py`) tracks one replay run's source/range selection, progress counters, and outcome. `Event` gains `is_replay`/`replay_job_id` (set only when an event is first created, never rewritten on a later replay that just rediscovers it); `RawEvent` gains `store_id` (denormalized at write time, not resolved only via a join through `event_id` -- see its docstring for why: an archived row must stay replayable even if the canonical `Event` it produced is later deleted, which is exactly the recovery scenario replay exists for) and `replay_job_id`. Added via `alembic/versions/c8a1f2b7d4e6_...py`; purely additive.
+- **Two replay sources.** `raw_event_archive` (the default) replays rows already in the `RawEvent` archive -- the primary, disaster-recovery-shaped workflow. `jsonl_file` replays a named dataset file under `data/` (path-traversal guarded, `.jsonl`-only) -- the API-exposed equivalent of `pipeline/ingest_events.py`'s offline importer. Both sort candidates by the event's own timestamp (not receipt/file order) before replaying, so out-of-order archival or dataset ordering doesn't corrupt session/dwell reconstruction.
+- **Idempotent by construction.** Replay doesn't reimplement deduplication -- it relies on `process_event`'s existing `(store_id, source_event_id)` uniqueness. Replaying an already-processed event returns the existing `Event` unchanged (counted as `duplicate`, not `accepted`) and only records a new `RawEvent` receipt for the replay attempt itself; rerunning the same replay any number of times is a safe no-op against derived state.
+- **Partial-failure isolation.** Each candidate is processed (and committed) independently -- one malformed row or cross-store line does not roll back or block the rest. A finished job's `status` is `completed`/`partial`/`failed` based on its `accepted/duplicate/failed_events` counts, with up to the first 50 per-item errors kept on the job for diagnosis.
+- **Synchronous, not fire-and-forget.** This project has no background task runner, so `POST /stores/{store_id}/replay` runs the job to completion within the request and returns its full final status; `GET /stores/{store_id}/replay[/​{job_id}]` (`app/api/replay.py`) let a client look up past runs afterward. Gated the same way ingestion-adjacent write actions are: `MANAGER`+ to run, the existing `ANALYST`+ floor to read -- same JWT/`StoreAccess` RBAC, no new auth system.
+- **Dashboard control.** A new "Replay" tab (`dashboard/index.html`/`app.js`) lets a signed-in manager pick a source, an optional range, and a dataset filename, run a replay, and see its result and a table of recent jobs for the current store.
+
 ## Quickstart
 
 ```powershell
@@ -292,10 +303,10 @@ Implemented for this submission:
 - Canonical UUID identity with `IdentityAlias`, an `Organization`/`Store`/`Camera`/`Zone` reference model, a `RawEvent` archive, store-scoped idempotency, store-scoped API-key authorization, and Alembic migrations (see the P0-P2 Audit Update above).
 - Trend-aware explainable anomaly detection with grouped alerts and a dashboard "What Changed" summary (P4.3).
 - JWT-authenticated dashboard access with store-level RBAC (`User`/`StoreAccess`, `ADMIN`/`MANAGER`/`ANALYST` roles) gating all analytics/dashboard routes, separate from ingestion's `ApiKey` auth (P4.4).
+- Raw-event replay workflow (Operational Infrastructure, above) and store-agnostic spatial onboarding (P7, above).
 
 Roadmap / design-not-fully-implemented items are explicitly treated as future work in the docs:
 
-- Raw-event *replay* workflow (the archive table itself is implemented; replaying it is not).
 - Cross-camera identity merging/ReID (the alias mapping itself is implemented; merging aliases across cameras is not).
 - Advanced anomaly detection and streaming dashboard updates.
 
@@ -365,13 +376,13 @@ Repository strengths:
 - Confidence-scored POS correlation with no-match handling.
 - Staff exclusion, group detection, re-entry behavior, path analytics, and deterministic recommendations.
 - Transparent demo data handling and reproducible local setup.
-- 101 passing tests (verified from a clean clone after the P0-P2 audit update above) covering ingestion, POS, correlation, analytics, dashboard static integration, HTTP-layer API integration, video event generation, staff/group inference, insights, path analytics, the identity/reference-data/raw-event/idempotency data model, and database bootstrap/migration behavior.
+- 340 passing tests (verified from a clean clone after the replay update above) covering ingestion, POS, correlation, analytics, dashboard static integration, HTTP-layer API integration, video event generation, staff/group inference, insights, path analytics, the identity/reference-data/raw-event/idempotency data model, replay, and database bootstrap/migration behavior.
 
 Remaining limitations:
 
 - Cross-camera ReID is not implemented; it is documented as roadmap because safe stitching needs calibrated topology and confidence modeling.
-- Raw-event replay (the archive itself is implemented) is a roadmap item. Live PostgreSQL verification is complete as of P6.
 - The dashboard is static and polling-based, suitable for challenge evaluation but not a full production command center.
+- Replay runs synchronously within the request that starts it (this project has no background task runner) -- fine at this project's data scale, but a very large replay would tie up the request for its full duration rather than returning immediately with a pollable job.
 
 Known tradeoffs:
 
@@ -381,7 +392,7 @@ Known tradeoffs:
 
 Production roadmap:
 
-- Add a raw-event replay workflow on top of the existing `RawEvent` archive.
+- Move replay execution to a background task runner so `POST /stores/{store_id}/replay` can return immediately with a pollable job instead of running synchronously (raw-event replay itself is implemented as of the Operational Infrastructure update above).
 - Add calibrated camera topology and optional confidence-scored cross-camera identity stitching (ReID) on top of the existing `IdentityAlias` model.
 - Add richer anomaly detection and peak-hour staffing recommendations (trend-aware explainable anomaly detection is implemented as of P4.3).
 - Add refresh controls and deployment monitoring (JWT-authenticated dashboard access and store-level RBAC are implemented as of the P4.4 update above).

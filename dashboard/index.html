@@ -43,6 +43,7 @@
           <button class="tab-button" type="button" data-view="comparison">Store Comparison</button>
           <button class="tab-button" type="button" data-view="live-analytics">Live Analytics</button>
           <button class="tab-button" type="button" data-view="zone-map">Zone Map</button>
+          <button class="tab-button" type="button" data-view="replay">Replay</button>
         </nav>
       </aside>
 
@@ -299,6 +300,69 @@
                 </div>
                 <div class="zone-map-list" id="zone-map-list"></div>
               </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="replay-view" data-view-panel="replay">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Replay Raw Events</h3>
+                <p>Reprocess historical CCTV events through the same ingestion/analytics pipeline as live traffic. Requires manager access; safe to re-run.</p>
+              </div>
+            </div>
+            <form class="replay-form" id="replay-form">
+              <label for="replay-source-type">Source</label>
+              <select id="replay-source-type" name="sourceType">
+                <option value="raw_event_archive" selected>Raw Event Archive (already-ingested events)</option>
+                <option value="jsonl_file">Dataset File (data/*.jsonl)</option>
+              </select>
+
+              <div class="replay-dataset-field" id="replay-dataset-field" hidden>
+                <label for="replay-dataset">Dataset filename</label>
+                <input type="text" id="replay-dataset" placeholder="generated_cctv_events.jsonl">
+              </div>
+
+              <label for="replay-start">Range start (optional)</label>
+              <input type="datetime-local" id="replay-start">
+              <label for="replay-end">Range end (optional)</label>
+              <input type="datetime-local" id="replay-end">
+
+              <button type="submit" id="replay-run">Run Replay</button>
+            </form>
+            <p class="replay-error" id="replay-error" hidden></p>
+          </section>
+
+          <section class="panel" id="replay-result-panel" hidden>
+            <div class="panel-header">
+              <h3>Last Run</h3>
+              <span id="replay-result-status">&mdash;</span>
+            </div>
+            <div class="kpi-grid" id="replay-result-kpis"></div>
+            <div class="replay-errors" id="replay-result-errors"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Recent Replay Jobs</h3>
+              <span id="replay-jobs-count">0 jobs</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Started</th>
+                    <th>Source</th>
+                    <th>Status</th>
+                    <th>Total</th>
+                    <th>Accepted</th>
+                    <th>Duplicate</th>
+                    <th>Failed</th>
+                  </tr>
+                </thead>
+                <tbody id="replay-jobs-body"></tbody>
+              </table>
             </div>
           </section>
         </section>
