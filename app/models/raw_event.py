@@ -46,6 +46,9 @@ class RawEvent(Base):
     validation_status: Mapped[str] = mapped_column(String, default="accepted", index=True)
     error_message: Mapped[str | None] = mapped_column(Text)
     replay_job_id: Mapped[str | None] = mapped_column(ForeignKey("replay_job.id"), index=True)
+    video_processing_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("video_processing_job.id"), index=True
+    )
     received_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     event: Mapped[Optional["Event"]] = relationship()

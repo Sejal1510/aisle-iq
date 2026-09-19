@@ -15,6 +15,8 @@ from app.core.storage import (
     MAP_ALLOWED_CONTENT_TYPES,
     MAP_ALLOWED_EXTENSIONS,
     PROJECT_ROOT,
+    VIDEO_ALLOWED_CONTENT_TYPES,
+    VIDEO_ALLOWED_EXTENSIONS,
     UnsafeIdentifierError,
     UnsupportedFileTypeError,
     UploadTooLargeError,
@@ -266,3 +268,84 @@ def test_save_upload_accepts_pdf_for_map_but_not_camera_reference(tmp_path, monk
             allowed_extensions=CAMERA_REFERENCE_ALLOWED_EXTENSIONS,
             allowed_content_types=CAMERA_REFERENCE_ALLOWED_CONTENT_TYPES,
         )
+
+
+# ----------------------------------------------------------------------
+# resolve_video_path: containment (P9)
+#
+# Camera.video_path is settable two ways: via save_upload (upload_camera_video,
+# already contained by construction -- a fresh uuid4 filename under
+# VIDEOS_DIR/<store_id>/) and as a plain string via the ADMIN-gated camera
+# JSON config endpoints (create_camera/update_camera), which bypasses
+# save_upload entirely. resolve_video_path is the independent containment
+# check for the latter -- see its docstring.
+# ----------------------------------------------------------------------
+def test_resolve_video_path_accepts_a_path_inside_videos_dir(tmp_path, monkeypatch) -> None:
+    import app.core.storage as storage_module
+
+    monkeypatch.setattr(storage_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(storage_module, "VIDEOS_DIR", tmp_path / "data" / "videos")
+
+    resolved = storage_module.resolve_video_path("data/videos/ST1001/abc123.mp4")
+    assert resolved == (tmp_path / "data" / "videos" / "ST1001" / "abc123.mp4").resolve()
+
+
+def test_resolve_video_path_rejects_dot_dot_traversal(tmp_path, monkeypatch) -> None:
+    import app.core.storage as storage_module
+
+    monkeypatch.setattr(storage_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(storage_module, "VIDEOS_DIR", tmp_path / "data" / "videos")
+
+    with pytest.raises(UnsafeIdentifierError):
+        storage_module.resolve_video_path("data/videos/../../outside/evil.mp4")
+
+
+def test_resolve_video_path_rejects_absolute_path(tmp_path, monkeypatch) -> None:
+    """Mirrors test_save_upload_rejects_absolute_path_subdir's reasoning:
+    Path's ``/`` operator discards the left operand entirely when the right
+    operand is absolute, so this must be caught by real containment, not a
+    string-prefix check."""
+    import app.core.storage as storage_module
+
+    monkeypatch.setattr(storage_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(storage_module, "VIDEOS_DIR", tmp_path / "data" / "videos")
+
+    absolute_elsewhere = str(PROJECT_ROOT.anchor) + "totally-elsewhere/video.mp4"
+    with pytest.raises(UnsafeIdentifierError):
+        storage_module.resolve_video_path(absolute_elsewhere)
+
+
+def test_resolve_video_path_rejects_path_resolving_outside_videos_dir(tmp_path, monkeypatch) -> None:
+    """A path with no literal ".." can still resolve outside VIDEOS_DIR --
+    e.g. a sibling directory that shares a string prefix with it. Must be
+    caught by resolve()+relative_to(), not a string-prefix comparison."""
+    import app.core.storage as storage_module
+
+    monkeypatch.setattr(storage_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(storage_module, "VIDEOS_DIR", tmp_path / "data" / "videos")
+
+    with pytest.raises(UnsafeIdentifierError):
+        storage_module.resolve_video_path("data/videos_backup/ST1001/abc123.mp4")
+
+
+def test_resolve_video_path_accepts_the_exact_shape_save_upload_produces(tmp_path, monkeypatch) -> None:
+    """The realistic case: a value save_upload actually produced (and the
+    upload endpoint continues to work unchanged) must validate cleanly."""
+    import app.core.storage as storage_module
+
+    monkeypatch.setattr(storage_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(storage_module, "VIDEOS_DIR", tmp_path / "data" / "videos")
+
+    upload = _FakeUpload("clip.mp4", "video/mp4", b"fake video bytes")
+    _, relative_path = save_upload(
+        upload,
+        storage_module.VIDEOS_DIR,
+        subdir="ST1001",
+        max_bytes=1_000_000,
+        allowed_extensions=VIDEO_ALLOWED_EXTENSIONS,
+        allowed_content_types=VIDEO_ALLOWED_CONTENT_TYPES,
+    )
+
+    resolved = storage_module.resolve_video_path(relative_path)
+    assert resolved.is_file()
+    assert resolved.read_bytes() == b"fake video bytes"

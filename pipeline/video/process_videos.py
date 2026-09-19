@@ -7,7 +7,7 @@ from typing import Any, TextIO
 
 import structlog
 
-from pipeline.video.events import VideoEventGenerator
+from pipeline.video.processing import process_camera
 from pipeline.video.tracking import UltralyticsByteTracker, read_video_metadata
 
 logger = structlog.get_logger(__name__)
@@ -87,7 +87,6 @@ def main() -> None:
 
     with output_path.open("w", encoding="utf-8") as output_file:
         for config in configs:
-            generator = VideoEventGenerator(config)
             camera_events = 0
             logger.info(
                 "processing_video",
@@ -97,12 +96,7 @@ def main() -> None:
                 video_path=str(config.video_path),
             )
 
-            for snapshot in tracker.track_video(config, max_frames=args.max_frames):
-                for event in generator.process_snapshot(snapshot):
-                    write_jsonl_event(output_file, event)
-                    camera_events += 1
-
-            for event in generator.finalize():
+            for event in process_camera(config, tracker, max_frames=args.max_frames):
                 write_jsonl_event(output_file, event)
                 camera_events += 1
 

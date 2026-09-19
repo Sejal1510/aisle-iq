@@ -190,7 +190,7 @@ def test_camera_and_coverage_round_trip(client: TestClient, db_session: Session)
 
     camera_response = client.post(
         "/stores/ST_CAM/config/cameras",
-        json={"camera_id": "CAM1", "name": "Laptop Zone Cam", "role": "zone", "video_path": "videos/cam1.mp4"},
+        json={"camera_id": "CAM1", "name": "Laptop Zone Cam", "role": "zone", "video_path": "data/videos/ST_CAM/cam1.mp4"},
         headers=headers,
     )
     assert camera_response.status_code == 201
@@ -229,7 +229,7 @@ def test_entry_line_coverage_round_trip(client: TestClient, db_session: Session)
 
     client.post(
         "/stores/ST_LINE/config/cameras",
-        json={"camera_id": "CAM_ENTRY", "role": "entry", "video_path": "videos/entry.mp4"},
+        json={"camera_id": "CAM_ENTRY", "role": "entry", "video_path": "data/videos/ST_LINE/entry.mp4"},
         headers=headers,
     )
     response = client.post(
@@ -289,7 +289,7 @@ def test_camera_update_is_scoped_to_store(client: TestClient, db_session: Sessio
 
     client.post(
         "/stores/ST_A/config/cameras",
-        json={"camera_id": "CAM_A", "role": "zone", "video_path": "a.mp4"},
+        json={"camera_id": "CAM_A", "role": "zone", "video_path": "data/videos/ST_A/a.mp4"},
         headers=headers,
     )
     response = client.patch(
@@ -355,6 +355,63 @@ def test_create_camera_rejects_traversal_style_id(client: TestClient, db_session
     assert response.status_code == 422
 
 
+# ----------------------------------------------------------------------
+# P9 security hardening: Camera.video_path containment (app.core.storage's
+# resolve_video_path). video_path is a plain string field here, not routed
+# through save_upload, so it must be independently validated at this write
+# boundary -- see resolve_video_path's docstring. Unit-level tests for
+# resolve_video_path itself live in tests/test_storage_security.py.
+# ----------------------------------------------------------------------
+def test_create_camera_rejects_traversal_video_path(client: TestClient, db_session: Session) -> None:
+    headers = _admin_headers_for_new_store(db_session, "ST_CAM_VIDSEC", "cam-vidsec-admin@example.com")
+
+    response = client.post(
+        "/stores/ST_CAM_VIDSEC/config/cameras",
+        json={"camera_id": "CAM_TRAV", "role": "zone", "video_path": "data/videos/../../outside.mp4"},
+        headers=headers,
+    )
+    assert response.status_code == 400
+
+
+def test_create_camera_rejects_absolute_video_path(client: TestClient, db_session: Session) -> None:
+    headers = _admin_headers_for_new_store(db_session, "ST_CAM_VIDSEC2", "cam-vidsec2-admin@example.com")
+
+    response = client.post(
+        "/stores/ST_CAM_VIDSEC2/config/cameras",
+        json={"camera_id": "CAM_ABS", "role": "zone", "video_path": "/etc/passwd"},
+        headers=headers,
+    )
+    assert response.status_code == 400
+
+
+def test_update_camera_rejects_traversal_video_path(client: TestClient, db_session: Session) -> None:
+    headers = _admin_headers_for_new_store(db_session, "ST_CAM_VIDSEC3", "cam-vidsec3-admin@example.com")
+    client.post(
+        "/stores/ST_CAM_VIDSEC3/config/cameras",
+        json={"camera_id": "CAM_UPD", "role": "zone", "video_path": "data/videos/ST_CAM_VIDSEC3/ok.mp4"},
+        headers=headers,
+    )
+
+    response = client.patch(
+        "/stores/ST_CAM_VIDSEC3/config/cameras/CAM_UPD",
+        json={"video_path": "../../../outside.mp4"},
+        headers=headers,
+    )
+    assert response.status_code == 400
+
+
+def test_create_camera_accepts_video_path_inside_videos_dir(client: TestClient, db_session: Session) -> None:
+    headers = _admin_headers_for_new_store(db_session, "ST_CAM_VIDOK", "cam-vidok-admin@example.com")
+
+    response = client.post(
+        "/stores/ST_CAM_VIDOK/config/cameras",
+        json={"camera_id": "CAM_OK2", "role": "zone", "video_path": "data/videos/ST_CAM_VIDOK/ok.mp4"},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    assert response.json()["video_path"] == "data/videos/ST_CAM_VIDOK/ok.mp4"
+
+
 def _admin_headers_for_new_store(db_session: Session, store_id: str, email: str) -> dict:
     db_session.add(Store(id=store_id))
     admin = create_user(db_session, email=email, raw_password="pw")
@@ -387,7 +444,7 @@ def test_camera_reference_upload_rejects_oversized_file(
     headers = _admin_headers_for_new_store(db_session, "ST_REF_BIG", "big-ref-admin@example.com")
     client.post(
         "/stores/ST_REF_BIG/config/cameras",
-        json={"camera_id": "CAM_BIG", "role": "zone", "video_path": "a.mp4"},
+        json={"camera_id": "CAM_BIG", "role": "zone", "video_path": "data/videos/ST_REF_BIG/a.mp4"},
         headers=headers,
     )
     monkeypatch.setattr(
@@ -420,7 +477,7 @@ def test_camera_reference_upload_rejects_unsupported_file_type(client: TestClien
     headers = _admin_headers_for_new_store(db_session, "ST_REF_BADTYPE", "badtype-ref-admin@example.com")
     client.post(
         "/stores/ST_REF_BADTYPE/config/cameras",
-        json={"camera_id": "CAM_BADTYPE", "role": "zone", "video_path": "a.mp4"},
+        json={"camera_id": "CAM_BADTYPE", "role": "zone", "video_path": "data/videos/ST_REF_BADTYPE/a.mp4"},
         headers=headers,
     )
 
@@ -436,7 +493,7 @@ def test_camera_reference_upload_accepts_valid_image(client: TestClient, db_sess
     headers = _admin_headers_for_new_store(db_session, "ST_REF_OK", "ok-ref-admin@example.com")
     client.post(
         "/stores/ST_REF_OK/config/cameras",
-        json={"camera_id": "CAM_OK", "role": "zone", "video_path": "a.mp4"},
+        json={"camera_id": "CAM_OK", "role": "zone", "video_path": "data/videos/ST_REF_OK/a.mp4"},
         headers=headers,
     )
 

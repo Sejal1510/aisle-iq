@@ -23,6 +23,20 @@ class Settings(BaseSettings):
     max_map_upload_bytes: int = 20 * 1024 * 1024  # 20 MB
     max_camera_reference_upload_bytes: int = 10 * 1024 * 1024  # 10 MB
 
+    # P9 (video processing). No reverse proxy sits in front of uvicorn in this
+    # deployment (Dockerfile/docker-compose.yml expose it directly, no nginx/
+    # Caddy config anywhere in this repo) and uvicorn itself imposes no
+    # default request-body ceiling, so there is no infrastructure-imposed
+    # number to defer to here -- this is a product choice, kept configurable
+    # (like the two settings above) rather than hardcoded, so a deployment
+    # with different constraints can override it via .env/environment
+    # without a code change. 2 GB comfortably covers a several-minute CCTV
+    # clip at common recording resolutions/bitrates while still bounding a
+    # single upload's disk/memory footprint (save_upload streams to disk in
+    # 1 MB chunks and aborts mid-write past this limit, so it never buffers
+    # the whole file -- see app/core/storage.py).
+    max_video_upload_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GB
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

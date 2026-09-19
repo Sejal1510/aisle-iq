@@ -10,6 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 MAPS_DIR = DATA_DIR / "maps"
 CAMERA_REFS_DIR = DATA_DIR / "camera_refs"
+VIDEOS_DIR = DATA_DIR / "videos"
 
 # P7: small, dependency-free local file storage for onboarding uploads (store
 # maps, camera reference stills). Deliberately not object storage/S3 -- the
@@ -71,6 +72,15 @@ MAP_ALLOWED_EXTENSIONS = _IMAGE_EXTENSIONS | {".pdf"}
 MAP_ALLOWED_CONTENT_TYPES = _IMAGE_CONTENT_TYPES | {"application/pdf"}
 CAMERA_REFERENCE_ALLOWED_EXTENSIONS = _IMAGE_EXTENSIONS
 CAMERA_REFERENCE_ALLOWED_CONTENT_TYPES = _IMAGE_CONTENT_TYPES
+
+# P9: recorded CCTV footage uploaded to a Camera for processing. Container
+# formats OpenCV/Ultralytics already read directly (see
+# pipeline/video/tracking.py) -- no transcoding is performed, so the
+# allowlist is deliberately narrow rather than "accept anything video/*".
+VIDEO_ALLOWED_EXTENSIONS = frozenset({".mp4", ".mov", ".avi", ".mkv"})
+VIDEO_ALLOWED_CONTENT_TYPES = frozenset(
+    {"video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska"}
+)
 
 
 def ensure_safe_identifier(value: str) -> str:
@@ -152,3 +162,32 @@ def save_upload(
 
 def resolve_relative_path(relative_path: str) -> Path:
     return PROJECT_ROOT / relative_path
+
+
+def resolve_video_path(relative_path: str) -> Path:
+    """Resolve a stored Camera.video_path (or VideoProcessingJob.video_path
+    snapshot) to an absolute filesystem path, raising UnsafeIdentifierError
+    unless it stays inside VIDEOS_DIR.
+
+    save_upload's own output is already contained by construction (a fresh
+    uuid4 filename under VIDEOS_DIR/<store_id>/ -- see save_upload above), so
+    this is a no-op for it. It exists because Camera.video_path is *also*
+    settable directly as a plain string via the ADMIN-gated camera-config
+    JSON endpoints (app.api.onboarding's create_camera/update_camera),
+    completely bypassing save_upload -- so a value that later gets opened as
+    a real file (the P9 video-processing worker; see
+    pipeline.video.config.build_config_for_job, which calls this too as
+    defense-in-depth) cannot be trusted to be contained just because it came
+    from the database. Rejects absolute paths (POSIX or Windows-drive) and
+    ../ traversal the same way save_upload's own subdir check does: resolve
+    both sides and require actual containment, not a string prefix match.
+    """
+    videos_dir_resolved = VIDEOS_DIR.resolve()
+    candidate = (PROJECT_ROOT / relative_path).resolve()
+    try:
+        candidate.relative_to(videos_dir_resolved)
+    except ValueError:
+        raise UnsafeIdentifierError(
+            f"{relative_path!r} does not resolve inside the video storage directory."
+        ) from None
+    return candidate

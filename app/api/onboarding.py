@@ -13,9 +13,13 @@ from app.core.storage import (
     MAP_ALLOWED_CONTENT_TYPES,
     MAP_ALLOWED_EXTENSIONS,
     MAPS_DIR,
+    VIDEO_ALLOWED_CONTENT_TYPES,
+    VIDEO_ALLOWED_EXTENSIONS,
+    VIDEOS_DIR,
     StorageError,
     UploadTooLargeError,
     resolve_relative_path,
+    resolve_video_path,
     save_upload,
 )
 from app.db.session import get_db
@@ -199,8 +203,14 @@ def list_zones(store_id: str, db: Session = Depends(get_db), access=_read_access
 def create_camera(
     store_id: str, payload: CameraCreateRequest, db: Session = Depends(get_db), access=_write_access
 ) -> CameraOut:
-    camera = _run(
-        lambda: StoreConfigService(db).create_camera(
+    def _apply() -> Camera:
+        # video_path here is a plain string field (not routed through
+        # save_upload -- see upload_camera_video above), so it must be
+        # re-validated at this write boundary rather than trusted: see
+        # resolve_video_path's docstring for why.
+        if payload.video_path is not None:
+            resolve_video_path(payload.video_path)
+        return StoreConfigService(db).create_camera(
             store_id,
             payload.camera_id,
             name=payload.name,
@@ -212,7 +222,8 @@ def create_camera(
             queue_completion_seconds=payload.queue_completion_seconds,
             queue_abandonment_seconds=payload.queue_abandonment_seconds,
         )
-    )
+
+    camera = _run(_apply)
     db.commit()
     return _camera_to_out(camera)
 
@@ -225,7 +236,14 @@ def update_camera(
     db: Session = Depends(get_db),
     access=_write_access,
 ) -> CameraOut:
-    camera = _run(lambda: StoreConfigService(db).update_camera(camera_id, **payload.model_dump()))
+    fields = payload.model_dump()
+
+    def _apply() -> Camera:
+        if fields.get("video_path") is not None:
+            resolve_video_path(fields["video_path"])
+        return StoreConfigService(db).update_camera(camera_id, **fields)
+
+    camera = _run(_apply)
     if camera.store_id != store_id:
         raise HTTPException(status_code=404, detail="Camera not found for this store.")
     db.commit()
@@ -273,6 +291,38 @@ def get_camera_reference_image(
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Reference image file is missing on disk.")
     return FileResponse(path)
+
+
+# ----------------------------------------------------------------------
+# P9: recorded video, uploaded per-camera as a processing input (not a
+# playback/library asset -- see docs/CHOICES.md's P9 entry). ADMIN-gated,
+# the same tier as every other camera config write -- this is structural
+# setup, not the operational "start processing" action
+# (app/api/video_processing.py, gated MANAGER).
+# ----------------------------------------------------------------------
+@router.post("/stores/{store_id}/config/cameras/{camera_id}/video", response_model=CameraOut, status_code=201)
+def upload_camera_video(
+    store_id: str,
+    camera_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    access=_write_access,
+) -> CameraOut:
+    _, relative_path = _run(
+        lambda: save_upload(
+            file,
+            VIDEOS_DIR,
+            subdir=store_id,
+            max_bytes=get_settings().max_video_upload_bytes,
+            allowed_extensions=VIDEO_ALLOWED_EXTENSIONS,
+            allowed_content_types=VIDEO_ALLOWED_CONTENT_TYPES,
+        )
+    )
+    camera = _run(lambda: StoreConfigService(db).update_camera(camera_id, video_path=relative_path))
+    if camera.store_id != store_id:
+        raise HTTPException(status_code=404, detail="Camera not found for this store.")
+    db.commit()
+    return _camera_to_out(camera)
 
 
 # ----------------------------------------------------------------------

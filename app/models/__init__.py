@@ -8,6 +8,7 @@ from app.models.replay import ReplayJob, ReplaySourceType, ReplayStatus
 from app.models.spatial import CameraCoverage, Map
 from app.models.store import Camera, Organization, Store, Zone
 from app.models.tracking import IdentityAlias, TrackedEntity, VisitSession
+from app.models.video_processing import VideoProcessingJob, VideoProcessingStatus
 
 __all__ = [
     "Base", "EventType", "SessionStatus", "CorrelationStatus", "ZoneType", "Role",
@@ -16,4 +17,5 @@ __all__ = [
     "PosTransaction", "PosTransactionItem", "TransactionCorrelation",
     "ApiKey", "User", "StoreAccess",
     "ReplayJob", "ReplaySourceType", "ReplayStatus",
+    "VideoProcessingJob", "VideoProcessingStatus",
 ]
