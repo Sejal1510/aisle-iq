@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
 from pipeline.video.config import (
     CameraRole,
@@ -20,7 +20,15 @@ class QueueState:
     last_seen_at: datetime
     position_at_join: int
     hotspot: tuple[float, float]
-    queue_event_id: str = field(default_factory=lambda: str(uuid4()))
+    queue_event_id: str
+    # Frame index of the most recent snapshot seen for this queue visit --
+    # updated alongside last_seen_at/hotspot while the track stays in the
+    # queue polygon. Needed because the terminal event (queue completed/
+    # abandoned) is emitted later, from finalize() in the queue-still-open
+    # case, where no TrackSnapshot is available -- this is what lets the
+    # terminal event's own deterministic event_id include a frame_index
+    # without needing one passed in at that point.
+    last_seen_frame_index: int
 
 
 class VideoEventGenerator:
@@ -106,12 +114,15 @@ class VideoEventGenerator:
                     last_seen_at=snapshot.timestamp,
                     position_at_join=len(self._active_queue_by_track) + 1,
                     hotspot=snapshot.normalized_footpoint,
+                    queue_event_id=self._deterministic_queue_event_id(snapshot),
+                    last_seen_frame_index=snapshot.frame_index,
                 )
                 self._active_queue_by_track[snapshot.track_id] = new_state
                 return [self._queue_join_event(snapshot, new_state)]
 
             state.last_seen_at = snapshot.timestamp
             state.hotspot = snapshot.normalized_footpoint
+            state.last_seen_frame_index = snapshot.frame_index
             return []
 
         if state is None:
@@ -127,12 +138,23 @@ class VideoEventGenerator:
 
     def _zone_event(self, *, snapshot: TrackSnapshot, zone: PolygonZone, event_type: str) -> dict:
         hotspot_x, hotspot_y = snapshot.normalized_footpoint
+        canonical_event_type = "ZONE_ENTER" if event_type == "zone_entered" else "ZONE_EXIT"
         return {
-            "event_id": str(uuid4()),
+            # zone_id is included here (unlike the other event constructors)
+            # because _process_zone_snapshot evaluates every configured zone
+            # against the same snapshot -- two overlapping zones entered on
+            # the same frame by the same track would otherwise share an
+            # identical (event_type, track_id, frame_index) triple.
+            "event_id": self._deterministic_event_id(
+                event_type=canonical_event_type,
+                track_id=snapshot.track_id,
+                frame_index=snapshot.frame_index,
+                zone_id=zone.id,
+            ),
             "store_id": snapshot.store_id,
             "camera_id": snapshot.camera_id,
             "visitor_id": _video_identity(snapshot),
-            "event_type": "ZONE_ENTER" if event_type == "zone_entered" else "ZONE_EXIT",
+            "event_type": canonical_event_type,
             "zone_id": zone.id,
             "timestamp": snapshot.timestamp.isoformat(),
             "dwell_ms": 0,
@@ -160,7 +182,11 @@ class VideoEventGenerator:
         queue_zone = self._queue_zone()
         hotspot_x, hotspot_y = state.hotspot
         return {
-            "event_id": str(uuid4()),
+            "event_id": self._deterministic_event_id(
+                event_type="BILLING_QUEUE_JOIN",
+                track_id=snapshot.track_id,
+                frame_index=snapshot.frame_index,
+            ),
             "store_id": snapshot.store_id,
             "camera_id": snapshot.camera_id,
             "visitor_id": _video_identity(snapshot),
@@ -196,12 +222,17 @@ class VideoEventGenerator:
         queue_zone = self._queue_zone()
         wait_seconds = max(0, int((exit_ts - state.joined_at).total_seconds()))
         hotspot_x, hotspot_y = state.hotspot
+        event_type = "BILLING_QUEUE_COMPLETE" if completed else "BILLING_QUEUE_ABANDON"
         return {
-            "event_id": str(uuid4()),
+            "event_id": self._deterministic_event_id(
+                event_type=event_type,
+                track_id=track_id,
+                frame_index=state.last_seen_frame_index,
+            ),
             "store_id": self.config.store_id,
             "camera_id": self.config.camera_id,
             "visitor_id": f"{self.config.camera_id}:{track_id}",
-            "event_type": "BILLING_QUEUE_COMPLETE" if completed else "BILLING_QUEUE_ABANDON",
+            "event_type": event_type,
             "timestamp": exit_ts.isoformat(),
             "zone_id": queue_zone.id if queue_zone else f"{self.config.camera_id}_QUEUE",
             "dwell_ms": wait_seconds * 1000,
@@ -236,7 +267,11 @@ class VideoEventGenerator:
         metadata: dict | None = None,
     ) -> dict:
         return {
-            "event_id": str(uuid4()),
+            "event_id": self._deterministic_event_id(
+                event_type=event_type,
+                track_id=snapshot.track_id,
+                frame_index=snapshot.frame_index,
+            ),
             "store_id": snapshot.store_id,
             "camera_id": snapshot.camera_id,
             "visitor_id": visitor_id,
@@ -260,6 +295,68 @@ class VideoEventGenerator:
             if zone.id == self.config.queue_zone_id:
                 return zone
         return None
+
+    def _deterministic_event_id(
+        self, *, event_type: str, track_id: str, frame_index: int, zone_id: str | None = None
+    ) -> str:
+        """A stable event_id for (this video, this track, this frame, this
+        event type) -- reprocessing the same uploaded video produces the
+        exact same id for the exact same logical event, so
+        EventIngestionService's existing (store_id, source_event_id)
+        dedup (see its process_event) recognizes a rerun as a duplicate
+        instead of fanning out into new Event/TrackedEntity/VisitSession
+        rows. config.video_path is what makes this specific to *this*
+        upload rather than just this camera -- save_upload mints a fresh
+        uuid4 filename per upload (see app/core/storage.py), so a
+        different upload to the same camera naturally gets a different
+        video_path and therefore a disjoint id space, even if it reuses
+        the same track_id/frame_index numbering.
+        """
+        parts: list[object] = [
+            self.config.store_id,
+            self.config.camera_id,
+            self.config.video_path,
+            event_type,
+            track_id,
+            frame_index,
+        ]
+        if zone_id is not None:
+            parts.append(zone_id)
+        return _deterministic_uuid(_EVENT_ID_NAMESPACE, *parts)
+
+    def _deterministic_queue_event_id(self, snapshot: TrackSnapshot) -> str:
+        """The id correlating one queue visit's JOIN and terminal (COMPLETE/
+        ABANDON) events -- computed once at join time (see QueueState) from
+        the join snapshot's frame_index, which is what disambiguates the same
+        track joining the queue more than once in one video."""
+        return _deterministic_uuid(
+            _QUEUE_EVENT_ID_NAMESPACE,
+            self.config.store_id,
+            self.config.camera_id,
+            self.config.video_path,
+            snapshot.track_id,
+            snapshot.frame_index,
+        )
+
+
+# Fixed namespaces for uuid5-derived, deterministic video-event identity (P9).
+# uuid5(namespace, name) always produces the same UUID for the same name, so
+# a rerun of the same video reproduces the same event_id/queue_event_id --
+# unlike the uuid4() this replaced, which was random on every emission and
+# made every video-processing run non-idempotent. Two separate namespaces
+# keep the event_id and queue_event_id spaces disjoint even though their
+# inputs overlap.
+_EVENT_ID_NAMESPACE = uuid5(NAMESPACE_URL, "https://aisleiq.dev/pipeline/video/event")
+_QUEUE_EVENT_ID_NAMESPACE = uuid5(NAMESPACE_URL, "https://aisleiq.dev/pipeline/video/queue-event")
+
+
+def _deterministic_uuid(namespace, *parts: object) -> str:
+    # \x1f (ASCII unit separator) is vanishingly unlikely to appear inside
+    # any part (ids, paths, event-type strings), unlike "|" or ":" which do
+    # show up in video paths -- keeps "a|b" + "c" from hashing the same as
+    # "a" + "b|c".
+    key = "\x1f".join(str(part) for part in parts)
+    return str(uuid5(namespace, key))
 
 
 def _video_identity(snapshot: TrackSnapshot) -> str:

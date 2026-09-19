@@ -38,7 +38,12 @@ class EventIngestionService:
         self.reference_data = ReferenceDataService(db)
 
     def process_event(
-        self, payload: EventPayload, *, run_inference: bool = True, replay_job_id: str | None = None
+        self,
+        payload: EventPayload,
+        *,
+        run_inference: bool = True,
+        replay_job_id: str | None = None,
+        video_processing_job_id: str | None = None,
     ) -> Event:
         """Persist a single normalized event.
 
@@ -55,6 +60,13 @@ class EventIngestionService:
         persisted), that new ``Event`` too. A replay that only rediscovers
         already-processed events leaves their ``is_replay``/``replay_job_id``
         untouched -- provenance is set once, at first creation, never rewritten.
+
+        ``video_processing_job_id`` (P9, additive) is the same idea for the
+        video-processing worker: set only by it, never by live ingestion or
+        replay, tagging the ``RawEvent`` receipt and (on genuine creation
+        only) the resulting ``Event``. Both provenance columns are purely
+        informational -- no analytics service filters on either -- so this
+        parameter changes no existing caller's behavior.
         """
         logger.info("processing_event", event_type=payload.event_type)
 
@@ -175,6 +187,7 @@ class EventIngestionService:
                 event_id=existing_event.id,
                 validation_status="duplicate",
                 replay_job_id=replay_job_id,
+                video_processing_job_id=video_processing_job_id,
             )
             return existing_event
 
@@ -273,6 +286,7 @@ class EventIngestionService:
             abandoned=abandoned,
             is_replay=replay_job_id is not None,
             replay_job_id=replay_job_id,
+            video_processing_job_id=video_processing_job_id,
         )
         self.db.add(new_event)
         self._record_raw_event(
@@ -281,6 +295,7 @@ class EventIngestionService:
             event_id=event_id_value,
             validation_status="accepted",
             replay_job_id=replay_job_id,
+            video_processing_job_id=video_processing_job_id,
         )
 
         # 7. Close Session on Exit
@@ -296,30 +311,48 @@ class EventIngestionService:
             and db_event_type == EventType.ENTRY
             and isinstance(payload, (EntryEvent, CanonicalEvent))
         ):
-            reentry_event = Event(
-                source_event_id=f"{source_event_id}:reentry" if source_event_id else None,
-                session_id=session.id,
-                tracked_entity_id=person_id,
-                store_id=store_id,
-                camera_id=payload.camera_id,
-                zone_id=zone_id,
-                event_type=EventType.REENTRY,
-                timestamp=timestamp,
-                hotspot_x=hotspot_x,
-                hotspot_y=hotspot_y,
-                is_face_hidden=is_face_hidden,
-                confidence=getattr(payload, "confidence", None),
-                metadata_json=json.dumps(
-                    {
-                        "previous_session_id": previous_completed_session.id,
-                        "previous_exit_time": previous_completed_session.exit_time.isoformat()
-                        if previous_completed_session.exit_time
-                        else None,
-                    },
-                    separators=(",", ":"),
-                ),
+            reentry_source_event_id = f"{source_event_id}:reentry" if source_event_id else None
+            # Guarded the same way as step 3's dedup check, not just left to
+            # the DB unique constraint: a deterministic source_event_id (P9
+            # video events) means a retried/resumed run can reach this exact
+            # branch again with the exact same key, and this insert -- unlike
+            # the main new_event path -- has no pre-existence check of its
+            # own, so it would otherwise surface as an unhandled
+            # IntegrityError instead of a graceful no-op.
+            reentry_already_exists = reentry_source_event_id is not None and (
+                self.db.execute(
+                    select(Event).where(
+                        Event.store_id == store_id,
+                        Event.source_event_id == reentry_source_event_id,
+                    )
+                ).scalar_one_or_none()
+                is not None
             )
-            self.db.add(reentry_event)
+            if not reentry_already_exists:
+                reentry_event = Event(
+                    source_event_id=reentry_source_event_id,
+                    session_id=session.id,
+                    tracked_entity_id=person_id,
+                    store_id=store_id,
+                    camera_id=payload.camera_id,
+                    zone_id=zone_id,
+                    event_type=EventType.REENTRY,
+                    timestamp=timestamp,
+                    hotspot_x=hotspot_x,
+                    hotspot_y=hotspot_y,
+                    is_face_hidden=is_face_hidden,
+                    confidence=getattr(payload, "confidence", None),
+                    metadata_json=json.dumps(
+                        {
+                            "previous_session_id": previous_completed_session.id,
+                            "previous_exit_time": previous_completed_session.exit_time.isoformat()
+                            if previous_completed_session.exit_time
+                            else None,
+                        },
+                        separators=(",", ":"),
+                    ),
+                )
+                self.db.add(reentry_event)
 
         self.db.flush()  # Push changes before inference and return.
         if run_inference:
@@ -411,6 +444,7 @@ class EventIngestionService:
         event_id: str | None,
         validation_status: str,
         replay_job_id: str | None = None,
+        video_processing_job_id: str | None = None,
     ) -> None:
         self.db.add(
             RawEvent(
@@ -421,6 +455,7 @@ class EventIngestionService:
                 event_id=event_id,
                 validation_status=validation_status,
                 replay_job_id=replay_job_id,
+                video_processing_job_id=video_processing_job_id,
             )
         )
 
