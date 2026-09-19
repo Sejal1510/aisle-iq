@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     # the whole file -- see app/core/storage.py).
     max_video_upload_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GB
 
+    # P9 (VideoProcessingService.reclaim_stale_jobs). How long a job may sit
+    # RUNNING with no status update before it's presumed to belong to a
+    # worker that crashed or was killed mid-run, and is returned to PENDING
+    # for another worker to retry. Configurable (like the two upload-size
+    # settings above) rather than a module-level constant, since the right
+    # value depends on realistic per-video processing time in a given
+    # deployment, not on anything this codebase can determine on its own.
+    video_processing_stale_job_minutes: int = 10
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

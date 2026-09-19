@@ -2,10 +2,12 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, utcnow
+
+_ACTIVE_STATUSES_SQL = "status IN ('PENDING', 'RUNNING')"
 
 
 class VideoProcessingStatus(str, enum.Enum):
@@ -38,6 +40,25 @@ class VideoProcessingJob(Base):
     """
 
     __tablename__ = "video_processing_job"
+    __table_args__ = (
+        # Mirrors the d4f9e2a8c1b3 migration's partial unique index exactly
+        # (same name/columns/predicate) so that Base.metadata.create_all()
+        # -- what every SQLite-backed test in this repo uses, and what
+        # init_db() uses for a fresh development database -- enforces the
+        # same "at most one active job per camera" invariant a real,
+        # Alembic-migrated database does. Without this, the ORM model and
+        # the migration would silently diverge: VideoProcessingService's
+        # duplicate-active-job handling (see create_job) depends on the
+        # database actually raising IntegrityError, and no create_all()-based
+        # test/dev database would ever do so.
+        Index(
+            "ux_video_processing_job_camera_active",
+            "camera_id",
+            unique=True,
+            sqlite_where=text(_ACTIVE_STATUSES_SQL),
+            postgresql_where=text(_ACTIVE_STATUSES_SQL),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     store_id: Mapped[str] = mapped_column(ForeignKey("store.id"), index=True)
