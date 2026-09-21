@@ -24,6 +24,7 @@ from app.models.video_processing import VideoProcessingJob, VideoProcessingStatu
 from app.schemas.event import EventPayload
 from app.services.event_ingestion_service import EventIngestionService
 from app.services.video_processing_service import VideoProcessingService
+from app.services.visitor_inference_service import VisitorInferenceService
 from app.worker.video_processing_worker import VideoProcessingWorker
 
 BASE_TIME = datetime(2026, 7, 1, 9, 0, 0)
@@ -454,6 +455,159 @@ def test_get_config_failure_is_treated_as_a_job_level_failure(db_session: Sessio
     reloaded = db_session.get(VideoProcessingJob, job.id)
     assert reloaded.status == VideoProcessingStatus.FAILED
     assert fake.calls == []  # process_camera was never reached
+
+
+# ---------------------------------------------------------------------------
+# Finalization failures (VisitorInferenceService.infer_store /
+# _mark_terminal_status), which run *after* CV/event processing already
+# completed, are isolated the same way a CV-level crash is -- regression
+# tests for the exception-isolation gap fixed following the afff800 review.
+# ---------------------------------------------------------------------------
+
+
+def test_infer_store_failure_does_not_kill_the_worker(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A: VisitorInferenceService.infer_store() raising must fail only this
+    job -- not escape run_once()/run_forever() -- and the worker must still
+    be able to claim and finish the next job."""
+    _make_camera(db_session, store_id="ST_P1", camera_id="CAM_P1", video_path="data/videos/ST_P1/a.mp4")
+    _make_camera(db_session, store_id="ST_P1", camera_id="CAM_P1B", video_path="data/videos/ST_P1/b.mp4")
+    job = VideoProcessingService(db_session).create_job("ST_P1", "CAM_P1")
+    job.created_at = BASE_TIME
+    next_job = VideoProcessingService(db_session).create_job("ST_P1", "CAM_P1B")
+    next_job.created_at = BASE_TIME + timedelta(seconds=5)
+    db_session.commit()
+
+    def _boom(self, store_id):
+        raise RuntimeError("inference exploded")
+
+    monkeypatch.setattr(VisitorInferenceService, "infer_store", _boom)
+
+    fake = FakeProcessCamera()
+    fake.queue_events([_event_dict(event_id="E-P1-1", store_id="ST_P1", camera_id="CAM_P1")])
+    fake.queue_events([])  # next_job: zero events -> infer_store is never called for it
+    worker = _make_worker(db_session, fake)
+
+    worker.run_once()  # must not raise even though infer_store blows up
+
+    reloaded = db_session.get(VideoProcessingJob, job.id)
+    assert reloaded.status == VideoProcessingStatus.FAILED
+    assert reloaded.error_message is not None
+    assert "inference exploded" in reloaded.error_message
+    # The event ingested before finalization failed stays durably committed --
+    # a finalization failure doesn't retroactively undo prior per-event work.
+    assert reloaded.accepted_events == 1
+
+    processed = worker.run_once()
+    assert processed is True
+    assert db_session.get(VideoProcessingJob, next_job.id).status == VideoProcessingStatus.COMPLETED
+
+
+def test_mark_terminal_status_failure_does_not_kill_the_worker(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B: an unexpected error inside _mark_terminal_status's terminal-status
+    decision (here, mark_completed) must fail only this job and leave the
+    worker able to process the next one."""
+    _make_camera(db_session, store_id="ST_P2", camera_id="CAM_P2", video_path="data/videos/ST_P2/a.mp4")
+    _make_camera(db_session, store_id="ST_P2", camera_id="CAM_P2B", video_path="data/videos/ST_P2/b.mp4")
+    job = VideoProcessingService(db_session).create_job("ST_P2", "CAM_P2")
+    job.created_at = BASE_TIME
+    next_job = VideoProcessingService(db_session).create_job("ST_P2", "CAM_P2B")
+    next_job.created_at = BASE_TIME + timedelta(seconds=5)
+    db_session.commit()
+
+    original_mark_completed = VideoProcessingService.mark_completed
+    calls = {"count": 0}
+
+    def _boom_once(self, job_arg):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("terminal status decision exploded")
+        return original_mark_completed(self, job_arg)
+
+    monkeypatch.setattr(VideoProcessingService, "mark_completed", _boom_once)
+
+    fake = FakeProcessCamera()
+    fake.queue_events([])  # zero events -> failed_events == 0 -> mark_completed is the path taken
+    fake.queue_events([])
+    worker = _make_worker(db_session, fake)
+
+    worker.run_once()  # must not raise even though mark_completed blows up
+
+    reloaded = db_session.get(VideoProcessingJob, job.id)
+    assert reloaded.status == VideoProcessingStatus.FAILED
+    assert reloaded.error_message is not None
+    assert "terminal status decision exploded" in reloaded.error_message
+
+    processed = worker.run_once()
+    assert processed is True
+    assert db_session.get(VideoProcessingJob, next_job.id).status == VideoProcessingStatus.COMPLETED
+
+
+def test_terminal_state_race_does_not_kill_the_worker(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C: simulates another worker's reclaim_stale_jobs resetting this job's
+    status out from under this one between generator exhaustion and
+    _mark_terminal_status. Both the original mark_completed attempt and the
+    recovery path's mark_failed attempt then hit
+    VideoProcessingService._require_running's guard -- there is no valid
+    terminal-state transition left to make, so the job is left exactly where
+    the (simulated) other worker put it rather than forced into an invalid
+    COMPLETED/FAILED state, and neither exception may escape run_once()."""
+    _make_camera(db_session, store_id="ST_P3", camera_id="CAM_P3", video_path="data/videos/ST_P3/a.mp4")
+    job = VideoProcessingService(db_session).create_job("ST_P3", "CAM_P3")
+
+    original_mark_completed = VideoProcessingService.mark_completed
+    calls = {"count": 0}
+
+    def _reclaimed_mid_finalization(self, job_arg):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            job_arg.status = VideoProcessingStatus.PENDING
+            self.db.commit()
+        return original_mark_completed(self, job_arg)
+
+    monkeypatch.setattr(VideoProcessingService, "mark_completed", _reclaimed_mid_finalization)
+
+    fake = FakeProcessCamera()
+    fake.queue_events([])
+    fake.queue_events([])
+    worker = _make_worker(db_session, fake)
+
+    worker.run_once()  # must not raise, even though both mark_completed and the recovery mark_failed fail
+
+    reloaded = db_session.get(VideoProcessingJob, job.id)
+    assert reloaded.status == VideoProcessingStatus.PENDING
+
+    # The worker keeps polling normally afterward -- reclaiming and
+    # completing the very same job the next time round, since it's still
+    # the oldest PENDING job.
+    processed = worker.run_once()
+    assert processed is True
+    assert db_session.get(VideoProcessingJob, job.id).status == VideoProcessingStatus.COMPLETED
+
+
+def test_successful_completion_with_inference_unaffected_by_finalization_wrapping(
+    db_session: Session,
+) -> None:
+    """D: wrapping the inference + terminal-status calls in their own
+    try/except must not change behavior on the ordinary success path."""
+    _make_camera(db_session, store_id="ST_P5", camera_id="CAM_P5", video_path="data/videos/ST_P5/a.mp4")
+    job = VideoProcessingService(db_session).create_job("ST_P5", "CAM_P5")
+
+    fake = FakeProcessCamera()
+    fake.queue_events([_event_dict(event_id="E-P5-1", store_id="ST_P5", camera_id="CAM_P5")])
+    worker = _make_worker(db_session, fake)
+
+    worker.run_once()
+
+    reloaded = db_session.get(VideoProcessingJob, job.id)
+    assert reloaded.status == VideoProcessingStatus.COMPLETED
+    assert reloaded.completed_at is not None
+    assert reloaded.accepted_events == 1
 
 
 # ---------------------------------------------------------------------------

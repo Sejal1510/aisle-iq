@@ -127,10 +127,13 @@ class VideoProcessingWorker:
         failure zone: a config that can't be built (bad camera state, an
         unsafe video_path) is just as fatal to this job as a tracker/file
         error mid-video, and both are handled identically -- mark_failed,
-        move on. This is the *only* try/except that can end a job without
-        reaching its counter-based COMPLETED/PARTIAL/FAILED decision below;
-        a per-event failure inside the loop is handled separately (see
-        _ingest_one_event) and never reaches here.
+        move on. A per-event failure inside the loop is handled separately
+        (see _ingest_one_event) and never reaches here.
+
+        Finalization (visitor inference plus the terminal-status decision)
+        is a second, separate failure zone below -- see
+        _fail_after_finalization -- so that a failure there is isolated the
+        same way, without conflating it with a CV-level crash.
         """
         try:
             config = self.service.get_config(job)
@@ -157,11 +160,51 @@ class VideoProcessingWorker:
             )
             return
 
-        if touched_store:
-            VisitorInferenceService(self.db).infer_store(job.store_id)
-            self.db.commit()
+        # A second, separate failure zone: CV/event processing already
+        # completed successfully by this point, so a failure here (a bug in
+        # inference, or another worker's reclaim_stale_jobs racing this job
+        # back to PENDING/RUNNING before this call) must not be treated like
+        # a CV-level crash -- and, per the isolate-this-job contract the
+        # block above already established, must not escape and take down
+        # run_forever() either.
+        try:
+            if touched_store:
+                VisitorInferenceService(self.db).infer_store(job.store_id)
+                self.db.commit()
 
-        self._mark_terminal_status(job)
+            self._mark_terminal_status(job)
+        except Exception as exc:  # noqa: BLE001 - isolate this job, keep the worker alive for the next one
+            self._fail_after_finalization(job, exc)
+
+    def _fail_after_finalization(self, job: VideoProcessingJob, exc: Exception) -> None:
+        """Best-effort recovery when finalization (visitor inference or the
+        terminal-status decision) fails after CV/event processing already
+        completed. Rolls back whatever transaction ``exc`` may have left
+        aborted, then tries to mark the job FAILED with ``exc`` as the
+        recorded cause.
+
+        That ``mark_failed`` call can itself raise ``VideoProcessingError``
+        if the job is no longer RUNNING -- e.g. another worker's
+        ``reclaim_stale_jobs`` already reset it out from under this one --
+        in which case there is no valid terminal-state transition left for
+        this worker to make. That secondary failure is logged, not raised:
+        this method must never let a finalization failure propagate out of
+        ``_process_job``.
+        """
+        logger.exception("video_worker_job_finalization_failed", job_id=job.id, error=str(exc))
+        self.db.rollback()
+        try:
+            self.service.mark_failed(
+                job,
+                error_message=f"Video processing finalization failed: {exc}",
+                error_details={"error_type": type(exc).__name__},
+            )
+        except Exception as mark_exc:  # noqa: BLE001 - job's terminal state is no longer ours to set; nothing more to do
+            logger.warning(
+                "video_worker_job_finalization_failed_terminal_state_unavailable",
+                job_id=job.id,
+                error=str(mark_exc),
+            )
 
     def _mark_terminal_status(self, job: VideoProcessingJob) -> None:
         """The generator reached full exhaustion without a job-level crash
