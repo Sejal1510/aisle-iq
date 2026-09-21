@@ -18,6 +18,7 @@ from app.api import events as events_module
 from app.api import onboarding as onboarding_module
 from app.api import replay as replay_module
 from app.api import stores as stores_module
+from app.api import video_processing as video_processing_module
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.db.session import SessionLocal, init_db
@@ -96,6 +97,15 @@ app.include_router(
 app.include_router(
     replay_module.router,
     tags=["replay"]
+)
+app.include_router(
+    video_processing_module.router,
+    prefix="/api/v1",
+    tags=["video-processing"]
+)
+app.include_router(
+    video_processing_module.router,
+    tags=["video-processing"]
 )
 app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
 ONBOARDING_DIR = PROJECT_ROOT / "onboarding"

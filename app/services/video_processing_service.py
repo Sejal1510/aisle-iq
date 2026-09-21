@@ -243,6 +243,36 @@ class VideoProcessingService:
         return reclaimed
 
     # ------------------------------------------------------------------
+    # Read (P9 API)
+    # ------------------------------------------------------------------
+    def get_job(self, store_id: str, job_id: str) -> VideoProcessingJob | None:
+        """Look up one job, scoped to ``store_id`` -- a job id that exists
+        but belongs to a different store is treated identically to one that
+        doesn't exist at all (``None``), the same cross-store-safe lookup
+        ``ReplayService.get_job`` already uses. Callers (the API route) turn
+        ``None`` into a 404, never a 403 -- from a store-scoped caller's
+        perspective, another store's job is indistinguishable from a
+        nonexistent one."""
+        job = self.db.get(VideoProcessingJob, job_id)
+        if job is None or job.store_id != store_id:
+            return None
+        return job
+
+    def list_jobs(self, store_id: str, *, limit: int = 20) -> list[VideoProcessingJob]:
+        """The ``limit`` most recently created jobs for this store, newest
+        first -- a fixed cap, not cursor/offset pagination, matching
+        ``ReplayService.list_jobs``: this project has no list endpoint that
+        paginates beyond a fixed recent-history window."""
+        return list(
+            self.db.execute(
+                select(VideoProcessingJob)
+                .where(VideoProcessingJob.store_id == store_id)
+                .order_by(VideoProcessingJob.created_at.desc())
+                .limit(limit)
+            ).scalars()
+        )
+
+    # ------------------------------------------------------------------
     # Progress
     # ------------------------------------------------------------------
     def record_event_outcome(self, job: VideoProcessingJob, outcome: EventOutcome) -> VideoProcessingJob:
