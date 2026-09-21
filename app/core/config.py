@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     # deployment, not on anything this codebase can determine on its own.
     video_processing_stale_job_minutes: int = 10
 
+    # P9 (VideoProcessingWorker's poll loop). How long the worker sleeps
+    # between polling cycles when claim_next_job() finds nothing PENDING --
+    # short enough that a newly created job starts promptly, long enough
+    # that an idle worker isn't hammering the database with empty claim
+    # attempts. Configurable for the same reason as the settings above: the
+    # right tradeoff depends on deployment-specific job arrival rate, not on
+    # anything this codebase can determine on its own.
+    video_processing_poll_interval_seconds: float = 5.0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
