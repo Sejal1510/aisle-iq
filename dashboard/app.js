@@ -19,6 +19,14 @@ const state = {
   // Zone Map (P8) is loaded lazily the first time its tab opens, same pattern
   // as Live Analytics above.
   zoneMapLoaded: false,
+  // Video Processing (P9). Unlike replay, a job is genuinely asynchronous --
+  // a separate worker process claims and runs it -- so this tab polls the
+  // most recently created job until it reaches a terminal status instead of
+  // treating a create response as the finished result. pollTimer/pollJobId
+  // track that in-flight poll so it can be cancelled on tab switch.
+  videoCameras: [],
+  videoPollTimer: null,
+  videoPollJobId: null,
 };
 
 const RANGE_PRESET_HOURS = { "24h": 24, "3d": 72, "7d": 168 };
@@ -103,6 +111,21 @@ const elements = {
   replayResultErrors: document.querySelector("#replay-result-errors"),
   replayJobsCount: document.querySelector("#replay-jobs-count"),
   replayJobsBody: document.querySelector("#replay-jobs-body"),
+  videoCameraSelect: document.querySelector("#video-camera-select"),
+  videoUploadForm: document.querySelector("#video-upload-form"),
+  videoFileInput: document.querySelector("#video-file-input"),
+  videoUploadButton: document.querySelector("#video-upload-button"),
+  videoUploadError: document.querySelector("#video-upload-error"),
+  videoUploadSuccess: document.querySelector("#video-upload-success"),
+  videoJobForm: document.querySelector("#video-job-form"),
+  videoJobButton: document.querySelector("#video-job-button"),
+  videoJobError: document.querySelector("#video-job-error"),
+  videoResultPanel: document.querySelector("#video-result-panel"),
+  videoResultStatus: document.querySelector("#video-result-status"),
+  videoResultKpis: document.querySelector("#video-result-kpis"),
+  videoResultErrors: document.querySelector("#video-result-errors"),
+  videoJobsCount: document.querySelector("#video-jobs-count"),
+  videoJobsBody: document.querySelector("#video-jobs-body"),
 };
 
 const MAX_VISIBLE_ALERTS = 4;
@@ -161,6 +184,16 @@ elements.replaySourceType.addEventListener("change", () => {
 elements.replayForm.addEventListener("submit", (event) => {
   event.preventDefault();
   runReplay();
+});
+
+elements.videoUploadForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  uploadVideo();
+});
+
+elements.videoJobForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  createVideoJob();
 });
 
 elements.rangeApply.addEventListener("click", () => {
@@ -294,8 +327,41 @@ async function postJson(path, body) {
   return response.json();
 }
 
+// postJson's multipart counterpart, for the one P9 route that takes a file
+// (upload_camera_video) rather than a JSON body -- same auth/401/error-detail
+// handling, but the body is a caller-built FormData and no Content-Type is
+// set manually so the browser can add its own multipart boundary.
+async function postForm(path, formData) {
+  const headers = { Accept: "application/json" };
+  if (state.authToken) {
+    headers.Authorization = `Bearer ${state.authToken}`;
+  }
+  const response = await fetch(path, { method: "POST", headers, body: formData });
+  if (response.status === 401) {
+    showLoginGate();
+    throw new Error("Session expired. Please sign in again.");
+  }
+  if (!response.ok) {
+    let message = `Request failed: ${response.status}`;
+    try {
+      const errorBody = await response.json();
+      message = errorBody.detail || errorBody.message || message;
+    } catch {
+      // response body wasn't JSON -- keep the generic message
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
 function activateView(viewName) {
-  const titles = { comparison: "Store Comparison", "live-analytics": "Live Analytics", "zone-map": "Zone Map", replay: "Replay" };
+  const titles = {
+    comparison: "Store Comparison",
+    "live-analytics": "Live Analytics",
+    "zone-map": "Zone Map",
+    "video-processing": "Video Processing",
+    replay: "Replay",
+  };
   elements.pageTitle.textContent = titles[viewName] || titleCase(viewName);
   elements.tabButtons.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === viewName);
@@ -311,6 +377,11 @@ function activateView(viewName) {
   }
   if (viewName === "replay") {
     loadReplayJobs();
+  }
+  if (viewName === "video-processing") {
+    loadVideoProcessingTab();
+  } else {
+    stopVideoJobPolling();
   }
 }
 
@@ -1045,6 +1116,224 @@ async function loadReplayJobs() {
     // surfacing a raw fetch error on a lazily-loaded tab.
     elements.replayJobsBody.innerHTML = `<tr><td class="empty-row" colspan="7">Unable to load replay jobs.</td></tr>`;
   }
+}
+
+// ---------------------------------------------------------------------------
+// P9 video processing -- upload a camera's recorded footage, queue it for
+// detection/tracking, and watch the resulting VideoProcessingJob. Unlike
+// replay (which runs synchronously in the request), a job here is claimed
+// and run by a separate worker process (app/worker/run_video_worker.py), so
+// "Create Processing Job" returns a PENDING/RUNNING job, not a finished one
+// -- startVideoJobPolling below is what turns that into a status the user
+// can actually watch settle: plain interval polling, no push-based
+// transport, stopped as soon as the job reaches a terminal status or the
+// user leaves this tab.
+// ---------------------------------------------------------------------------
+
+const VIDEO_STATUS_LABELS = {
+  pending: "Pending",
+  running: "Processing…",
+  completed: "Completed",
+  partial: "Partial",
+  failed: "Failed",
+};
+
+const VIDEO_TERMINAL_STATUSES = new Set(["completed", "partial", "failed"]);
+const VIDEO_POLL_INTERVAL_MS = 4000;
+
+function loadVideoProcessingTab() {
+  loadVideoCameras();
+  loadVideoJobs();
+}
+
+async function loadVideoCameras() {
+  try {
+    const cameras = await fetchJson(`/stores/${state.storeId}/config/cameras`);
+    state.videoCameras = cameras || [];
+    const previousSelection = elements.videoCameraSelect.value;
+    elements.videoCameraSelect.innerHTML = state.videoCameras.length
+      ? state.videoCameras
+          .map((camera) => {
+            const label = camera.name ? `${camera.name} (${camera.camera_id})` : camera.camera_id;
+            const videoState = camera.video_path ? "video uploaded" : "no video yet";
+            return `<option value="${escapeHtml(camera.camera_id)}">${escapeHtml(label)} — ${videoState}</option>`;
+          })
+          .join("")
+      : `<option value="" disabled selected>No cameras configured for this store</option>`;
+    if (previousSelection && state.videoCameras.some((camera) => camera.camera_id === previousSelection)) {
+      elements.videoCameraSelect.value = previousSelection;
+    }
+  } catch (error) {
+    state.videoCameras = [];
+    elements.videoCameraSelect.innerHTML = `<option value="" disabled selected>Unable to load cameras</option>`;
+  }
+}
+
+function selectedVideoCameraId() {
+  return elements.videoCameraSelect.value || null;
+}
+
+function cameraLabel(cameraId) {
+  const camera = state.videoCameras.find((candidate) => candidate.camera_id === cameraId);
+  return camera && camera.name ? `${camera.name} (${cameraId})` : cameraId;
+}
+
+async function uploadVideo() {
+  elements.videoUploadError.hidden = true;
+  elements.videoUploadSuccess.hidden = true;
+
+  const cameraId = selectedVideoCameraId();
+  const file = elements.videoFileInput.files[0];
+  if (!cameraId) {
+    elements.videoUploadError.hidden = false;
+    elements.videoUploadError.textContent = "Select a camera first.";
+    return;
+  }
+  if (!file) {
+    elements.videoUploadError.hidden = false;
+    elements.videoUploadError.textContent = "Choose a video file first.";
+    return;
+  }
+
+  elements.videoUploadButton.disabled = true;
+  elements.videoUploadButton.textContent = "Uploading…";
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    await postForm(`/stores/${state.storeId}/config/cameras/${cameraId}/video`, formData);
+    elements.videoUploadSuccess.hidden = false;
+    elements.videoUploadSuccess.textContent = `Video uploaded for ${cameraLabel(cameraId)}. You can now create a processing job.`;
+    elements.videoFileInput.value = "";
+    await loadVideoCameras();
+    elements.videoCameraSelect.value = cameraId;
+  } catch (error) {
+    elements.videoUploadError.hidden = false;
+    elements.videoUploadError.textContent = error.message;
+  } finally {
+    elements.videoUploadButton.disabled = false;
+    elements.videoUploadButton.textContent = "Upload Video";
+  }
+}
+
+async function createVideoJob() {
+  elements.videoJobError.hidden = true;
+
+  const cameraId = selectedVideoCameraId();
+  if (!cameraId) {
+    elements.videoJobError.hidden = false;
+    elements.videoJobError.textContent = "Select a camera first.";
+    return;
+  }
+
+  elements.videoJobButton.disabled = true;
+  elements.videoJobButton.textContent = "Creating…";
+  try {
+    const job = await postJson(`/stores/${state.storeId}/video-processing`, { camera_id: cameraId });
+    renderVideoJobResult(job);
+    await loadVideoJobs();
+    if (!VIDEO_TERMINAL_STATUSES.has(job.status)) {
+      startVideoJobPolling(job.id);
+    }
+  } catch (error) {
+    elements.videoJobError.hidden = false;
+    elements.videoJobError.textContent = error.message;
+  } finally {
+    elements.videoJobButton.disabled = false;
+    elements.videoJobButton.textContent = "Create Processing Job";
+  }
+}
+
+function renderVideoJobResult(job) {
+  elements.videoResultPanel.hidden = false;
+  elements.videoResultStatus.textContent = VIDEO_STATUS_LABELS[job.status] || job.status;
+  elements.videoResultKpis.innerHTML = `
+    <article class="kpi-card">
+      <span>Total Events</span>
+      <strong>${formatNumber(job.total_events)}</strong>
+    </article>
+    <article class="kpi-card">
+      <span>Accepted</span>
+      <strong>${formatNumber(job.accepted_events)}</strong>
+      <small>Newly created by this run</small>
+    </article>
+    <article class="kpi-card">
+      <span>Duplicate</span>
+      <strong>${formatNumber(job.duplicate_events)}</strong>
+      <small>Already processed -- no change</small>
+    </article>
+    <article class="kpi-card">
+      <span>Failed</span>
+      <strong>${formatNumber(job.failed_events)}</strong>
+    </article>
+  `;
+
+  if (job.error_message) {
+    elements.videoResultErrors.innerHTML = `<p class="replay-error-message">${escapeHtml(job.error_message)}</p>`;
+  } else if (VIDEO_TERMINAL_STATUSES.has(job.status) && job.status !== "completed") {
+    elements.videoResultErrors.innerHTML = "";
+  } else if (!VIDEO_TERMINAL_STATUSES.has(job.status)) {
+    elements.videoResultErrors.innerHTML = `<p>Waiting for the video-processing worker to pick this up and run it…</p>`;
+  } else {
+    elements.videoResultErrors.innerHTML = "";
+  }
+}
+
+async function loadVideoJobs() {
+  try {
+    const response = await fetchJson(`/stores/${state.storeId}/video-processing`);
+    const jobs = response.jobs || [];
+    elements.videoJobsCount.textContent = `${formatNumber(jobs.length)} ${jobs.length === 1 ? "job" : "jobs"}`;
+    elements.videoJobsBody.innerHTML = jobs.length
+      ? jobs
+          .map((job) => {
+            return `
+              <tr>
+                <td>${formatDateTime(new Date(job.created_at))}</td>
+                <td>${escapeHtml(cameraLabel(job.camera_id))}</td>
+                <td>${escapeHtml(VIDEO_STATUS_LABELS[job.status] || job.status)}</td>
+                <td>${formatNumber(job.total_events)}</td>
+                <td>${formatNumber(job.accepted_events)}</td>
+                <td>${formatNumber(job.duplicate_events)}</td>
+                <td>${formatNumber(job.failed_events)}</td>
+              </tr>
+            `;
+          })
+          .join("")
+      : `<tr><td class="empty-row" colspan="7">No processing jobs yet.</td></tr>`;
+  } catch (error) {
+    // A viewer without ANALYST access to this store, or no jobs endpoint
+    // reachable yet -- show the same table empty state rather than
+    // surfacing a raw fetch error on a lazily-loaded tab.
+    elements.videoJobsBody.innerHTML = `<tr><td class="empty-row" colspan="7">Unable to load processing jobs.</td></tr>`;
+  }
+}
+
+function startVideoJobPolling(jobId) {
+  stopVideoJobPolling();
+  state.videoPollJobId = jobId;
+  state.videoPollTimer = setInterval(async () => {
+    try {
+      const job = await fetchJson(`/stores/${state.storeId}/video-processing/${jobId}`);
+      renderVideoJobResult(job);
+      if (VIDEO_TERMINAL_STATUSES.has(job.status)) {
+        stopVideoJobPolling();
+        await loadVideoJobs();
+      }
+    } catch (error) {
+      // Store switched, session expired, or the job briefly 404s under a
+      // race with another action -- stop polling rather than repeat a
+      // failing request indefinitely.
+      stopVideoJobPolling();
+    }
+  }, VIDEO_POLL_INTERVAL_MS);
+}
+
+function stopVideoJobPolling() {
+  if (state.videoPollTimer) {
+    clearInterval(state.videoPollTimer);
+  }
+  state.videoPollTimer = null;
+  state.videoPollJobId = null;
 }
 
 function formatBucketLabel(isoString) {

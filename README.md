@@ -118,11 +118,17 @@ The Quickstart above uses SQLite directly on the host -- zero external infrastru
 docker compose up --build
 ```
 
-This starts three services: `db` (PostgreSQL 16, with a persistent named volume), `migrate` (a one-shot `alembic upgrade head` against `db`, then exits), and `api` (only starts once `migrate` has completed successfully). `migrate` and `api` share one built image (`aisleiq-api`) rather than building the identical Dockerfile twice. The API is available at the same `http://127.0.0.1:8000` as the Quickstart path once `docker compose ps` shows `api` healthy.
+This starts four services: `db` (PostgreSQL 16, with a persistent named volume), `migrate` (a one-shot `alembic upgrade head` against `db`, then exits), `api` (only starts once `migrate` has completed successfully), and `worker` (the P9 video-processing worker; also waits on `migrate`). `migrate` and `api` share one built image (`aisleiq-api`) rather than building the identical Dockerfile twice; `worker` builds from its own `Dockerfile.worker` into a separate `aisleiq-worker` image (see below). The API is available at the same `http://127.0.0.1:8000` as the Quickstart path once `docker compose ps` shows `api` healthy.
 
 To point a non-Docker local run at PostgreSQL instead of SQLite, set `DATABASE_URL` to a `postgresql+psycopg://` URL in `.env` -- see `.env.example` for the exact form and a note on why the `+psycopg` driver segment is required.
 
-The Docker image installs only the bare `requirements.txt` (API/dashboard runtime) -- not the video-processing stack or dev/test tooling, neither of which the containerized `api`/`migrate` services ever use. See `docs/CHOICES.md`'s "Dependency Footprint" entry for what that removed and why.
+The `api`/`migrate` image installs only the bare `requirements.txt` (API/dashboard runtime) -- not the video-processing stack or dev/test tooling, neither of which those two services ever use. See `docs/CHOICES.md`'s "Dependency Footprint" entry for what that removed and why.
+
+### Video processing (P9)
+
+`worker` (`Dockerfile.worker`, installing `requirements-video.txt`'s YOLOv8/ByteTrack/OpenCV stack) is what actually claims and runs a `VideoProcessingJob` once one exists -- it is a separate image from `api` on purpose, so the CV/ML dependencies never land on the lightweight, request-serving `api` image. `api` and `worker` share a `video_uploads` named volume mounted at `/app/data/videos` in both containers, so a video `api` saves via the onboarding upload endpoint is the same file `worker` later opens by path.
+
+With the stack running, the dashboard's **Video Processing** tab (`http://127.0.0.1:8000/dashboard`, under a MANAGER/ADMIN-accessible store) walks through the whole flow: pick a camera, upload its recorded footage, create a processing job, and watch it move from `pending` → `running` → a terminal status (`completed`/`partial`/`failed`) via polling. The same three calls it makes are also plain HTTP: `POST /stores/{store_id}/config/cameras/{camera_id}/video` (multipart upload, ADMIN), `POST /stores/{store_id}/video-processing` (`{"camera_id": ...}`, MANAGER), and `GET /stores/{store_id}/video-processing/{job_id}` for status.
 
 ## Demo Data Flow
 

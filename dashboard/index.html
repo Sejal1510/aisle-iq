@@ -43,6 +43,7 @@
           <button class="tab-button" type="button" data-view="comparison">Store Comparison</button>
           <button class="tab-button" type="button" data-view="live-analytics">Live Analytics</button>
           <button class="tab-button" type="button" data-view="zone-map">Zone Map</button>
+          <button class="tab-button" type="button" data-view="video-processing">Video Processing</button>
           <button class="tab-button" type="button" data-view="replay">Replay</button>
         </nav>
       </aside>
@@ -300,6 +301,67 @@
                 </div>
                 <div class="zone-map-list" id="zone-map-list"></div>
               </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="video-processing-view" data-view-panel="video-processing">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Process CCTV Video</h3>
+                <p>Upload a camera's recorded footage, then queue it for detection/tracking. Uploading requires admin access; starting a job requires manager access. Max upload size 2&nbsp;GB (.mp4, .mov, .avi, .mkv).</p>
+              </div>
+            </div>
+
+            <div class="video-camera-picker">
+              <label for="video-camera-select">Camera</label>
+              <select id="video-camera-select" name="cameraId"></select>
+            </div>
+
+            <form class="video-form" id="video-upload-form">
+              <label for="video-file-input">Video file</label>
+              <input type="file" id="video-file-input" accept=".mp4,.mov,.avi,.mkv" required>
+              <button type="submit" id="video-upload-button">Upload Video</button>
+            </form>
+            <p class="video-error" id="video-upload-error" hidden></p>
+            <p class="video-success" id="video-upload-success" hidden></p>
+
+            <form class="video-form" id="video-job-form">
+              <button type="submit" id="video-job-button">Create Processing Job</button>
+            </form>
+            <p class="video-error" id="video-job-error" hidden></p>
+          </section>
+
+          <section class="panel" id="video-result-panel" hidden>
+            <div class="panel-header">
+              <h3>Latest Job</h3>
+              <span id="video-result-status">&mdash;</span>
+            </div>
+            <div class="kpi-grid" id="video-result-kpis"></div>
+            <div class="replay-errors" id="video-result-errors"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Recent Processing Jobs</h3>
+              <span id="video-jobs-count">0 jobs</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Created</th>
+                    <th>Camera</th>
+                    <th>Status</th>
+                    <th>Total</th>
+                    <th>Accepted</th>
+                    <th>Duplicate</th>
+                    <th>Failed</th>
+                  </tr>
+                </thead>
+                <tbody id="video-jobs-body"></tbody>
+              </table>
             </div>
           </section>
         </section>

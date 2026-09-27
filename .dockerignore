@@ -15,13 +15,16 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-# Dev/test/CI -- not needed in the runtime image; Dockerfile only installs
-# requirements.txt, not requirements-dev.txt or requirements-video.txt.
+# Dev/test/CI -- not needed in either runtime image. Dockerfile (api) only
+# installs requirements.txt; requirements-dev.txt is never installed by any
+# built image. requirements-video.txt is NOT excluded (unlike the other two
+# below it) -- Dockerfile.worker (P9) installs it, and it's a tiny text file
+# that adds no CV dependencies to the api image just by being present in the
+# shared build context (api's Dockerfile never references it).
 tests/
 docs/
 .github/
 requirements-dev.txt
-requirements-video.txt
 
 # Local runtime artifacts -- never read at startup (logs go to stdout; see
 # app/core/logging.py), and a local SQLite file should never be baked into

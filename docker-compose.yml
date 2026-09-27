@@ -54,6 +54,16 @@ services:
       DATABASE_URL: postgresql+psycopg://aisleiq:aisleiq@db:5432/aisleiq
       ENVIRONMENT: staging
       JWT_SECRET_KEY: gDuRbXpYBD8aPkJDbJ2UVZo5waMtTk7odpM9jYmsrq45I6Fgm3fBudOXWoXxG4cT
+    volumes:
+      # P9: shared with `worker` below so a video app.api.onboarding's
+      # upload_camera_video saves here is the same file
+      # pipeline.video.tracking.UltralyticsByteTracker later opens by path --
+      # without this, each service would see its own container-local
+      # data/videos/ and every job would fail with "no such file". Scoped to
+      # just this subdirectory (not all of data/) so the maps/camera-refs
+      # uploads and the demo CSV/JSONL files baked into the image by `COPY .
+      # .` (see Dockerfile) are untouched.
+      - video_uploads:/app/data/videos
     depends_on:
       db:
         condition: service_healthy
@@ -66,5 +76,36 @@ services:
       retries: 3
       start_period: 20s
 
+  # P9: claims and runs VideoProcessingJob rows created via the api's
+  # /video-processing routes (app/worker/run_video_worker.py's poll loop).
+  # Built from its own Dockerfile (Dockerfile.worker) rather than reusing the
+  # `api` image -- see that file's own comment for why the CV/ML dependency
+  # stack (requirements-video.txt) stays out of `api` entirely. Included in
+  # the default `docker compose up` stack: previously this process had no
+  # Compose service at all, so a job created through the api would sit
+  # PENDING forever with nothing ever polling for it.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: aisleiq-worker
+    environment:
+      DATABASE_URL: postgresql+psycopg://aisleiq:aisleiq@db:5432/aisleiq
+      ENVIRONMENT: staging
+      JWT_SECRET_KEY: gDuRbXpYBD8aPkJDbJ2UVZo5waMtTk7odpM9jYmsrq45I6Fgm3fBudOXWoXxG4cT
+    volumes:
+      - video_uploads:/app/data/videos
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # A crashed worker process (e.g. a transient model-load failure) should
+    # come back on its own -- run_forever()'s own per-job isolation (see
+    # VideoProcessingWorker._process_job) already keeps one bad *job* from
+    # taking the process down; this covers the process itself.
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  video_uploads:

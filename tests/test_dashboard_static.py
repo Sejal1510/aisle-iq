@@ -211,14 +211,23 @@ def test_live_analytics_validates_custom_range_client_side() -> None:
 
 def test_live_analytics_as_of_wording_is_present_not_realtime() -> None:
     """Required refinement 1: honest 'as of <timestamp>' wording near the
-    range controls, no streaming/real-time claim."""
+    range controls, no streaming/real-time claim in Live Analytics itself.
+
+    P9's Video Processing tab legitimately polls a real, asynchronous
+    VideoProcessingJob elsewhere in this file (a separate worker process
+    claims and runs it -- see test_video_processing_panel_polls_job_status_
+    until_terminal below), so this check is scoped to the script content
+    before that section rather than the whole file -- Live Analytics itself
+    still makes no such claim.
+    """
     html = (DASHBOARD_DIR / "index.html").read_text(encoding="utf-8")
     script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+    live_analytics_script = script.split("// P9 video processing")[0]
 
     assert "analytics-as-of" in html
     assert "As of ${formatDateTime(asOf)}" in script
     assert "WebSocket" not in script
-    assert "setInterval" not in script
+    assert "setInterval" not in live_analytics_script
 
 
 def test_live_analytics_css_components_exist() -> None:
@@ -398,3 +407,106 @@ def test_p44_logout_clears_token_and_shows_login_gate() -> None:
     show_login_gate_body = script.split("function showLoginGate() {")[1].split("\n}\n")[0]
     assert "sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)" in show_login_gate_body
     assert "state.authToken = null" in show_login_gate_body
+
+
+# ---------------------------------------------------------------------------
+# P9: Video Processing tab -- upload a camera's recorded footage through the
+# existing onboarding upload endpoint, create a processing job through the
+# existing video-processing API, and watch it through to a terminal status.
+# HTTP-layer proof that the two endpoints actually chain together lives in
+# tests/test_video_upload_to_job_contract.py; these tests are static/
+# structural, the same style test_live_analytics_view_and_controls_exist_in_
+# html above already uses for a lazily-loaded tab.
+# ---------------------------------------------------------------------------
+
+
+def test_video_processing_view_and_controls_exist_in_html() -> None:
+    html = (DASHBOARD_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert 'data-view="video-processing"' in html
+    assert 'id="video-processing-view"' in html
+    assert 'data-view-panel="video-processing"' in html
+    assert 'id="video-camera-select"' in html
+    assert 'id="video-file-input"' in html
+    assert 'id="video-upload-form"' in html
+    assert 'id="video-job-form"' in html
+    assert 'id="video-jobs-body"' in html
+    assert 'id="video-jobs-count"' in html
+    assert 'id="video-result-panel"' in html
+
+
+def test_video_processing_uploads_through_the_existing_camera_video_endpoint() -> None:
+    """Must reuse app/api/onboarding.py's existing multipart upload route,
+    not a new/duplicate one."""
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "/stores/${state.storeId}/config/cameras/${cameraId}/video" in script
+    assert "new FormData()" in script
+    assert "async function postForm(path, formData)" in script
+
+
+def test_video_processing_creates_and_lists_jobs_through_the_existing_api() -> None:
+    """Must reuse app/api/video_processing.py's existing routes, not a new/
+    duplicate one, and must not redesign VideoProcessingService's contract
+    (a bare {camera_id} create body, matching VideoProcessingJobCreateRequest)."""
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "postJson(`/stores/${state.storeId}/video-processing`, { camera_id: cameraId })" in script
+    assert "fetchJson(`/stores/${state.storeId}/video-processing`)" in script
+
+
+def test_video_processing_panel_polls_job_status_until_terminal() -> None:
+    """A job is claimed and run by a separate worker process, so the panel
+    must poll (simple polling, per the P9 panel's own scope -- no WebSocket/
+    SSE) rather than treat the create response as already finished, and must
+    stop polling once the job reaches a terminal status or the user leaves
+    the tab (checked against activateView's own body, the same pattern
+    test_live_analytics_is_loaded_lazily_on_first_tab_open above uses)."""
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "function startVideoJobPolling(jobId)" in script
+    assert "function stopVideoJobPolling()" in script
+    assert "setInterval(" in script
+    assert "clearInterval(" in script
+    assert "VIDEO_TERMINAL_STATUSES" in script
+    activate_view_body = script.split("function activateView(viewName) {")[1].split("\n}\n")[0]
+    assert "stopVideoJobPolling();" in activate_view_body
+
+
+def test_video_processing_has_clear_success_and_error_states() -> None:
+    html = (DASHBOARD_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="video-upload-error"' in html
+    assert 'id="video-upload-success"' in html
+    assert 'id="video-job-error"' in html
+
+
+def test_video_processing_jobs_table_has_an_honest_empty_state() -> None:
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "No processing jobs yet." in script
+    assert "Unable to load processing jobs." in script
+
+
+def test_video_processing_css_components_exist() -> None:
+    styles = (DASHBOARD_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert ".video-form" in styles
+    assert ".video-error" in styles
+    assert ".video-success" in styles
+
+
+def test_video_processing_does_not_introduce_websockets_or_sse() -> None:
+    script = (DASHBOARD_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "WebSocket" not in script
+    assert "EventSource" not in script
+
+
+def test_existing_replay_tab_is_unaffected_by_the_new_video_processing_tab() -> None:
+    """Regression guard, same spirit as
+    test_existing_tabs_and_endpoints_are_unchanged above."""
+    html = (DASHBOARD_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert 'data-view="replay"' in html
+    assert 'id="replay-jobs-body"' in html

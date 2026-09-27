@@ -1,0 +1,54 @@
+# Separate image for the P9 video-processing worker
+# (app/worker/run_video_worker.py). Deliberately not layered onto the api
+# image/Dockerfile: this pulls in the CV/ML stack (ultralytics, opencv,
+# torch) that the api process never imports -- installing it into the api
+# image instead would cost that image several GB of unused packages on every
+# request-serving replica for a dependency only this one background process
+# needs. See requirements-video.txt for the dependency list itself and
+# Dockerfile's own comment for the api-side half of this split.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# requirements-video.txt itself does `-r requirements.txt` (see that file) --
+# both must be present before pip resolves it, not just the one named on the
+# command line.
+COPY requirements.txt requirements-video.txt .
+# ultralytics' `torch>=1.8.0` dependency resolves to PyPI's default build,
+# which bundles a full CUDA toolkit (nvidia-cublas/cudnn/nvjitlink/triton/...,
+# several GB) even though this worker has no GPU access declared anywhere in
+# docker-compose.yml -- pointing at PyTorch's own CPU-only wheel index as a
+# fallback (--extra-index-url, additive: PyPI is still consulted for
+# everything that index doesn't host) lets the resolver satisfy `torch` with
+# the much smaller CPU-only build instead.
+# --timeout/--retries: this install still pulls several large wheels (torch,
+# opencv) at tens of MB each, well past pip's 15s default per-read timeout on
+# a slow or congested link -- a mid-stream ReadTimeoutError otherwise aborts
+# the whole build instead of retrying.
+RUN pip install --no-cache-dir --timeout 120 --retries 10 \
+      --extra-index-url https://download.pytorch.org/whl/cpu \
+      -r requirements-video.txt
+
+# opencv-python-headless still dynamically links a handful of small X11/GL
+# client libraries at import time despite dropping the actual GUI/display
+# backend itself (confirmed one at a time by the P9 Docker smoke test:
+# `import cv2` first failed on libxcb.so.1, then libGL.so.1, crash-looping
+# the worker container each time) -- python:3.11-slim ships none of them.
+# libgl1/libglib2.0-0 kept alongside libxcb1 as the small, well-known set
+# opencv-python-headless needs together on a Debian slim base, rather than
+# the much larger GTK/Qt toolkit set a non-headless opencv-python would pull
+# in for an actual display backend this worker never uses.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libxcb1 libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+
+# No EXPOSE/HEALTHCHECK -- this process has no HTTP surface (see
+# run_video_worker.py's poll loop). Its liveness is "is the container
+# running", which `docker compose ps` / the `restart: unless-stopped` policy
+# on the worker service already cover.
+CMD ["python", "-m", "app.worker.run_video_worker"]

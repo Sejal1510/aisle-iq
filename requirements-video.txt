@@ -1,13 +1,19 @@
-# Local development only: the CCTV video-processing pipeline
+# Local development, plus the P9 video-processing worker's own image (see
+# Dockerfile.worker): the CCTV video-processing pipeline
 # (pipeline/video/detectors.py, pipeline/video/tracking.py -- YOLOv8 person
-# detection + ByteTrack). Not installed by the Docker image (see Dockerfile):
-# the API/dashboard never imports these, and the running app never invokes
-# the video pipeline (it's a standalone CLI tool -- see README's "Demo
-# Walkthrough"). Install this before running `python -m
-# pipeline.video.process_videos`.
+# detection + ByteTrack). Never installed by the *api* image (see
+# Dockerfile) -- the API/dashboard process never imports these, only the
+# separate worker process does (app/worker/run_video_worker.py). Install
+# this locally before running `python -m pipeline.video.process_videos` or
+# `python -m app.worker.run_video_worker`.
 -r requirements.txt
 
 # CCTV Video Processing
 ultralytics
-opencv-python
+# Headless build: this codebase only ever calls cv2.VideoCapture (see
+# pipeline/video/tracking.py) to decode frames -- never a GUI/display
+# function -- so opencv-python-headless gives the same API without pulling
+# in GTK/Qt/libGL, keeping both local dev installs and Dockerfile.worker's
+# image free of system GUI dependencies neither needs.
+opencv-python-headless
 numpy

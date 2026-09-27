@@ -829,6 +829,73 @@ th {
   margin: 4px 0;
 }
 
+.video-camera-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 360px;
+  margin-top: 12px;
+}
+
+.video-camera-picker label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.video-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin-top: 12px;
+}
+
+.video-form label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.video-form select,
+.video-form input,
+.video-form button {
+  min-height: 42px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  padding: 0 12px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.video-form button {
+  background: var(--green);
+  color: white;
+  cursor: pointer;
+  border-color: var(--green);
+}
+
+.video-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.video-error {
+  color: var(--coral);
+  font-size: 0.84rem;
+  margin: 10px 0 0;
+}
+
+.video-success {
+  color: var(--green);
+  font-size: 0.84rem;
+  margin: 10px 0 0;
+}
+
 .analytics-empty {
   padding: 40px;
   text-align: center;
