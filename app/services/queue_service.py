@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.enums import EventType
 from app.models.event import Event
+from app.models.video_processing import VideoProcessingJob, VideoProcessingStatus
 from app.schemas.live_analytics import (
     CurrentQueueResponse,
     QueuedEntity,
@@ -16,6 +17,27 @@ from app.schemas.live_analytics import (
 from app.services.occupancy_service import to_naive
 
 _TERMINAL_TYPES = (EventType.QUEUE_COMPLETED, EventType.QUEUE_ABANDONED)
+
+# P9 audit fix: a BILLING_QUEUE_JOIN with no terminal event yet is exactly
+# what "currently queued" is supposed to mean for a live camera feed -- but
+# pipeline.video.events._process_billing_snapshot also leaves a JOIN
+# permanently without a terminal event whenever the matching exit's dwell
+# falls below queue_abandonment_seconds ("boundary noise", by explicit
+# design -- see test_billing_camera_short_boundary_dwell_emits_join_but_no_
+# terminal_event). That is a correct, intentional choice for the CV/event-
+# generation layer, but it means an unresolved JOIN is not, on its own,
+# proof that someone is still standing in line: once the VideoProcessingJob
+# that produced it has reached a terminal status, there are no more frames
+# left to ever resolve it, and treating it as "currently queued" would be
+# reporting a fact about right now from a video that finished processing
+# minutes, hours, or days ago. A JOIN with no ``video_processing_job_id``
+# (live/API/replay ingestion, or the offline JSONL importer) carries no such
+# caveat and is left untouched.
+_TERMINAL_JOB_STATUSES = (
+    VideoProcessingStatus.COMPLETED,
+    VideoProcessingStatus.FAILED,
+    VideoProcessingStatus.PARTIAL,
+)
 
 
 class QueueService:
@@ -51,6 +73,14 @@ class QueueService:
     genuinely separate visits by the same entity (join A -> complete A ->
     join B): A and B are distinct queue_event_id values and remain two
     independent entries.
+
+    current_queue additionally excludes a JOIN whose originating
+    VideoProcessingJob has already reached a terminal status (COMPLETED,
+    FAILED, PARTIAL) -- see _TERMINAL_JOB_STATUSES above for why. A JOIN
+    from a still-RUNNING job, or with no video_processing_job_id at all
+    (live ingestion), is unaffected. queue_metrics is untouched: it only
+    ever counts terminal (complete/abandon) Event rows, which are already
+    resolved facts regardless of the job's current status.
     """
 
     def __init__(self, db: Session):
@@ -60,7 +90,12 @@ class QueueService:
         resolved_as_of = self._resolve_as_of(store_id, as_of)
 
         joined = self.db.execute(
-            select(Event.tracked_entity_id, Event.queue_event_id, Event.timestamp)
+            select(
+                Event.tracked_entity_id,
+                Event.queue_event_id,
+                Event.timestamp,
+                Event.video_processing_job_id,
+            )
             .where(Event.store_id == store_id)
             .where(Event.event_type == EventType.BILLING_QUEUE_JOIN)
             .where(Event.queue_event_id.is_not(None))
@@ -80,11 +115,29 @@ class QueueService:
         # Group by queue_event_id first: a duplicate/near-duplicate JOIN
         # submission for the same visit must not appear as a second person
         # in line. Keep the earliest observed join for each visit.
-        earliest_join_by_visit: dict[str, tuple[str, datetime]] = {}
-        for tracked_entity_id, queue_event_id, joined_at in joined:
+        earliest_join_by_visit: dict[str, tuple[str, datetime, str | None]] = {}
+        for tracked_entity_id, queue_event_id, joined_at, job_id in joined:
             existing = earliest_join_by_visit.get(queue_event_id)
             if existing is None or joined_at < existing[1]:
-                earliest_join_by_visit[queue_event_id] = (tracked_entity_id, joined_at)
+                earliest_join_by_visit[queue_event_id] = (tracked_entity_id, joined_at, job_id)
+
+        # Terminal-job filter: only look up jobs actually referenced by an
+        # otherwise-still-open JOIN, and only exclude the ones that are
+        # themselves done -- a JOIN tied to a still-RUNNING job stays live.
+        candidate_job_ids = {
+            job_id
+            for queue_event_id, (_, _, job_id) in earliest_join_by_visit.items()
+            if job_id is not None and queue_event_id not in terminal_queue_event_ids
+        }
+        terminal_job_ids: set[str] = set()
+        if candidate_job_ids:
+            terminal_job_ids = set(
+                self.db.scalars(
+                    select(VideoProcessingJob.id)
+                    .where(VideoProcessingJob.id.in_(candidate_job_ids))
+                    .where(VideoProcessingJob.status.in_(_TERMINAL_JOB_STATUSES))
+                ).all()
+            )
 
         queued_entities = [
             QueuedEntity(
@@ -93,8 +146,8 @@ class QueueService:
                 joined_at=joined_at,
                 waiting_seconds=max(0, int((resolved_as_of - joined_at).total_seconds())),
             )
-            for queue_event_id, (tracked_entity_id, joined_at) in earliest_join_by_visit.items()
-            if queue_event_id not in terminal_queue_event_ids
+            for queue_event_id, (tracked_entity_id, joined_at, job_id) in earliest_join_by_visit.items()
+            if queue_event_id not in terminal_queue_event_ids and job_id not in terminal_job_ids
         ]
         queued_entities.sort(key=lambda entity: entity.joined_at)
 

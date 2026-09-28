@@ -1,5 +1,11 @@
 # P3.2: live and period queue intelligence, correlated by queue_event_id,
 # including inconsistent/out-of-order queue event sequences.
+#
+# P9 audit fix: a JOIN whose originating VideoProcessingJob has reached a
+# terminal status (COMPLETED/FAILED/PARTIAL) must not count as "currently
+# queued" -- see the CAM6 real-video-E2E audit and QueueService's own
+# docstring for the full rationale. Covered below by the
+# test_terminal_video_job_* tests.
 from datetime import datetime, timedelta
 
 import pytest
@@ -9,8 +15,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.models import Base
 from app.models.enums import EventType
 from app.models.event import Event
-from app.models.store import Store
+from app.models.store import Camera, Store
 from app.models.tracking import TrackedEntity, VisitSession
+from app.models.video_processing import VideoProcessingJob, VideoProcessingStatus
 from app.services.queue_service import QueueService
 
 
@@ -41,7 +48,16 @@ def _entity_session(db: Session, store_id: str, entity_id: str) -> VisitSession:
     return session
 
 
-def _join(db: Session, session: VisitSession, *, entity_id: str, store_id: str, queue_event_id: str, ts: datetime) -> None:
+def _join(
+    db: Session,
+    session: VisitSession,
+    *,
+    entity_id: str,
+    store_id: str,
+    queue_event_id: str,
+    ts: datetime,
+    video_processing_job_id: str | None = None,
+) -> None:
     db.add(
         Event(
             session_id=session.id,
@@ -50,8 +66,26 @@ def _join(db: Session, session: VisitSession, *, entity_id: str, store_id: str, 
             event_type=EventType.BILLING_QUEUE_JOIN,
             timestamp=ts,
             queue_event_id=queue_event_id,
+            video_processing_job_id=video_processing_job_id,
         )
     )
+
+
+def _video_job(db: Session, store_id: str, camera_id: str, *, status: VideoProcessingStatus) -> str:
+    """A minimal VideoProcessingJob row -- just enough for its id/status to
+    be queryable by QueueService.current_queue's terminal-job filter."""
+    if db.get(Camera, camera_id) is None:
+        db.add(Camera(id=camera_id, store_id=store_id, role="billing"))
+        db.flush()
+    job = VideoProcessingJob(
+        store_id=store_id,
+        camera_id=camera_id,
+        video_path=f"data/videos/{store_id}/{camera_id}.mp4",
+        status=status,
+    )
+    db.add(job)
+    db.flush()
+    return job.id
 
 
 def _terminal(
@@ -273,6 +307,106 @@ def test_queue_metrics_time_range_excludes_events_outside_window(db_session: Ses
 def test_queue_metrics_validates_range(db_session: Session) -> None:
     with pytest.raises(ValueError, match="end must be after start"):
         QueueService(db_session).queue_metrics("ST_X", BASE_TIME, BASE_TIME)
+
+
+def test_unresolved_joins_from_a_completed_video_job_are_not_currently_queued(db_session: Session) -> None:
+    """Regression test for the real CAM6 E2E finding: a COMPLETED
+    VideoProcessingJob produced 5 BILLING_QUEUE_JOIN events, only 1 of which
+    ever got a terminal event (an ABANDON forced by VideoEventGenerator.
+    finalize() at video end) -- the other 4 are "boundary noise" JOINs
+    whose matching exit's dwell fell below queue_abandonment_seconds (see
+    pipeline/video/events.py's _process_billing_snapshot and
+    test_billing_camera_short_boundary_dwell_emits_join_but_no_terminal_
+    event). Once the job is COMPLETED, there are no more frames left to
+    ever resolve those 4 -- none of the 5 should show up as "currently
+    queued"."""
+    store_id = "ST_Q_CAM6"
+    camera_id = "CAM6"
+    job_id = _video_job(db_session, store_id, camera_id, status=VideoProcessingStatus.COMPLETED)
+
+    session = _entity_session(db_session, store_id, "V1")
+    _join(
+        db_session, session, entity_id="V1", store_id=store_id, queue_event_id="Q1",
+        ts=BASE_TIME, video_processing_job_id=job_id,
+    )
+    _join(
+        db_session, session, entity_id="V1", store_id=store_id, queue_event_id="Q2",
+        ts=BASE_TIME + timedelta(seconds=39), video_processing_job_id=job_id,
+    )
+    _join(
+        db_session, session, entity_id="V1", store_id=store_id, queue_event_id="Q3",
+        ts=BASE_TIME + timedelta(seconds=64), video_processing_job_id=job_id,
+    )
+    _terminal(
+        db_session, session, entity_id="V1", store_id=store_id, queue_event_id="Q3",
+        ts=BASE_TIME + timedelta(seconds=64), event_type=EventType.QUEUE_ABANDONED, wait_seconds=0,
+    )
+    _join(
+        db_session, session, entity_id="V1", store_id=store_id, queue_event_id="Q4",
+        ts=BASE_TIME + timedelta(seconds=75), video_processing_job_id=job_id,
+    )
+    _join(
+        db_session, session, entity_id="V1", store_id=store_id, queue_event_id="Q5",
+        ts=BASE_TIME + timedelta(seconds=112), video_processing_job_id=job_id,
+    )
+    db_session.commit()
+
+    response = QueueService(db_session).current_queue(store_id, as_of=BASE_TIME + timedelta(minutes=10))
+
+    assert response.queue_length == 0
+    assert response.queued_entities == []
+
+
+def test_unresolved_join_from_a_running_video_job_is_still_counted(db_session: Session) -> None:
+    """The other side of the fix: a job that hasn't finished yet (still
+    RUNNING) may legitimately have a JOIN that just hasn't resolved because
+    the worker hasn't reached that part of the video yet -- unlike a
+    COMPLETED job, more frames (and therefore a possible terminal event)
+    could still be coming, so this JOIN must remain in the current queue."""
+    store_id = "ST_Q_RUNNING"
+    camera_id = "CAM_RUNNING"
+    job_id = _video_job(db_session, store_id, camera_id, status=VideoProcessingStatus.RUNNING)
+
+    session = _entity_session(db_session, store_id, "V1")
+    _join(
+        db_session, session, entity_id="V1", store_id=store_id, queue_event_id="Q1",
+        ts=BASE_TIME, video_processing_job_id=job_id,
+    )
+    db_session.commit()
+
+    response = QueueService(db_session).current_queue(store_id, as_of=BASE_TIME + timedelta(minutes=1))
+
+    assert response.queue_length == 1
+    assert response.queued_entities[0].queue_event_id == "Q1"
+
+
+def test_queue_metrics_unaffected_by_job_status_of_the_originating_join(db_session: Session) -> None:
+    """queue_metrics only ever reads terminal (complete/abandon) Event rows
+    -- it has no reason to consult VideoProcessingJob at all, and this fix
+    must not have added one. A visit that both belongs to a COMPLETED job
+    and has a real terminal event must still be counted exactly as before."""
+    store_id = "ST_Q_METRICS_JOB"
+    camera_id = "CAM_METRICS"
+    job_id = _video_job(db_session, store_id, camera_id, status=VideoProcessingStatus.COMPLETED)
+
+    session = _entity_session(db_session, store_id, "V1")
+    _join(
+        db_session, session, entity_id="V1", store_id=store_id, queue_event_id="Q1",
+        ts=BASE_TIME, video_processing_job_id=job_id,
+    )
+    _terminal(
+        db_session, session, entity_id="V1", store_id=store_id, queue_event_id="Q1",
+        ts=BASE_TIME + timedelta(seconds=50), event_type=EventType.QUEUE_COMPLETED, wait_seconds=50,
+    )
+    db_session.commit()
+
+    metrics = QueueService(db_session).queue_metrics(
+        store_id, BASE_TIME - timedelta(hours=1), BASE_TIME + timedelta(hours=1)
+    )
+
+    assert metrics.completed_visits == 1
+    assert metrics.abandoned_visits == 0
+    assert metrics.average_wait_seconds == 50.0
 
 
 def test_queue_is_store_scoped(db_session: Session) -> None:

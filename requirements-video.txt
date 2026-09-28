@@ -17,3 +17,16 @@ ultralytics
 # image free of system GUI dependencies neither needs.
 opencv-python-headless
 numpy
+# ByteTrack (pipeline.video.tracking's UltralyticsByteTracker, via
+# model.track(tracker="bytetrack.yaml")) needs lap for its linear-assignment
+# matching step at runtime, but ultralytics' own PyPI metadata only lists it
+# under its optional "solutions" extra, not the base install -- pip installing
+# plain `ultralytics` never pulls it in. Without this line, ultralytics'
+# own check_requirements()/AutoUpdate silently pip-installs an unpinned lap
+# into the running container the first time ByteTrack actually runs, which
+# depends on live network/PyPI access and only patches that one container's
+# writable layer, not the image (confirmed via the P9 real-video E2E
+# validation's post-run dependency audit: a fresh container from the same
+# image had no lap at all). Pinned here so it's baked into the image at
+# build time instead.
+lap>=0.5.12
