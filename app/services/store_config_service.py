@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.enums import ZoneType
+from app.models.identity_linking import CameraAdjacency
 from app.models.spatial import (
     GEOMETRY_KIND_LINE,
     GEOMETRY_KIND_POLYGON,
@@ -267,6 +268,58 @@ class StoreConfigService:
             raise StoreConfigError(f"Camera coverage '{coverage_id}' not found.")
         self.db.delete(coverage)
         self.db.flush()
+
+    # ------------------------------------------------------------------
+    # CameraAdjacency (P10.1)
+    # ------------------------------------------------------------------
+    def create_camera_adjacency(
+        self,
+        store_id: str,
+        *,
+        from_camera_id: str,
+        to_camera_id: str,
+        min_transit_seconds: float,
+        max_transit_seconds: float,
+    ) -> CameraAdjacency:
+        """Register a directional camera relationship for P10.1's identity
+        linking. Purely configuration -- this does not itself evaluate or
+        propose any candidate (see IdentityLinkingService)."""
+        self._require_store(store_id)
+        from_camera = self._require_camera(from_camera_id)
+        to_camera = self._require_camera(to_camera_id)
+        if from_camera.store_id != store_id or to_camera.store_id != store_id:
+            raise StoreConfigError("Both cameras must belong to the given store.")
+        existing = self.db.execute(
+            select(CameraAdjacency).where(
+                CameraAdjacency.store_id == store_id,
+                CameraAdjacency.from_camera_id == from_camera_id,
+                CameraAdjacency.to_camera_id == to_camera_id,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise StoreConfigError(
+                f"Camera adjacency from '{from_camera_id}' to '{to_camera_id}' already exists."
+            )
+
+        adjacency = CameraAdjacency(
+            store_id=store_id,
+            from_camera_id=from_camera_id,
+            to_camera_id=to_camera_id,
+            min_transit_seconds=min_transit_seconds,
+            max_transit_seconds=max_transit_seconds,
+        )
+        self.db.add(adjacency)
+        self.db.flush()
+        return adjacency
+
+    def list_camera_adjacency(self, store_id: str) -> list[CameraAdjacency]:
+        return list(
+            self.db.scalars(
+                select(CameraAdjacency)
+                .where(CameraAdjacency.store_id == store_id)
+                .order_by(CameraAdjacency.created_at)
+            )
+        )
 
     # ------------------------------------------------------------------
     # helpers

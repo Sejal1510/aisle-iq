@@ -1,7 +1,15 @@
 from app.db.base import Base
 from app.models.auth import ApiKey, StoreAccess, User
-from app.models.enums import CorrelationStatus, EventType, Role, SessionStatus, ZoneType
+from app.models.enums import (
+    CorrelationStatus,
+    EventType,
+    IdentityLinkReason,
+    Role,
+    SessionStatus,
+    ZoneType,
+)
 from app.models.event import Event
+from app.models.identity_linking import CameraAdjacency, IdentityLinkCandidate
 from app.models.pos import PosTransaction, PosTransactionItem, TransactionCorrelation
 from app.models.raw_event import RawEvent
 from app.models.replay import ReplayJob, ReplaySourceType, ReplayStatus
@@ -18,4 +26,5 @@ __all__ = [
     "ApiKey", "User", "StoreAccess",
     "ReplayJob", "ReplaySourceType", "ReplayStatus",
     "VideoProcessingJob", "VideoProcessingStatus",
+    "IdentityLinkReason", "CameraAdjacency", "IdentityLinkCandidate",
 ]

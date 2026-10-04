@@ -15,6 +15,7 @@ from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from app.api import auth as auth_module
 from app.api import events as events_module
+from app.api import identity_linking as identity_linking_module
 from app.api import onboarding as onboarding_module
 from app.api import replay as replay_module
 from app.api import stores as stores_module
@@ -106,6 +107,15 @@ app.include_router(
 app.include_router(
     video_processing_module.router,
     tags=["video-processing"]
+)
+app.include_router(
+    identity_linking_module.router,
+    prefix="/api/v1",
+    tags=["identity-linking"]
+)
+app.include_router(
+    identity_linking_module.router,
+    tags=["identity-linking"]
 )
 app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
 ONBOARDING_DIR = PROJECT_ROOT / "onboarding"

@@ -56,3 +56,10 @@ yolov8*.pt
 
 # Local database
 store_intelligence.db
+
+# Local P10.1 validation footage (not committed)
+/billing_area.mp4
+/entry 1.mp4
+/entry 2.mp4
+/zone.mp4
+/store 2 - layout.png

@@ -33,3 +33,13 @@ class Role(str, enum.Enum):
     ADMIN = "admin"
     MANAGER = "manager"
     ANALYST = "analyst"
+
+class IdentityLinkReason(str, enum.Enum):
+    """Why IdentityLinkingService.evaluate_candidates did or did not accept a
+    pairwise cross-camera candidate. See app.models.identity_linking.
+    IdentityLinkCandidate -- a row always has exactly one of these, including
+    accepted rows, so the evidence is equally explainable either way."""
+
+    ACCEPTED = "accepted"
+    AMBIGUOUS = "ambiguous"
+    BELOW_THRESHOLD = "below_threshold"
