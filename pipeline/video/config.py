@@ -11,6 +11,12 @@ if TYPE_CHECKING:
 
     from app.models.store import Camera
     from app.models.video_processing import VideoProcessingJob
+    from pipeline.video.annotation import AnnotationRequest
+
+
+# Mirrors app.models.enums.ZoneType.STAFF_AREA (this module stays importable
+# without the app's ORM layer).
+STAFF_AREA_ZONE_TYPE = "STAFF_AREA"
 
 
 class CameraRole(str, Enum):
@@ -32,6 +38,12 @@ class PolygonZone:
     type: str
     is_revenue_zone: bool
     polygon: tuple[Point, ...]
+
+    @property
+    def is_staff_area(self) -> bool:
+        """A staff-only area (ZoneType.STAFF_AREA): used to classify tracks
+        as staff, never treated as a shopping zone or a queue."""
+        return self.type == STAFF_AREA_ZONE_TYPE
 
 
 @dataclass(frozen=True)
@@ -55,7 +67,22 @@ class VideoProcessingConfig:
     confidence_threshold: float = 0.35
     queue_completion_seconds: int = 45
     queue_abandonment_seconds: int = 8
+    # How long a track must go without being seen *inside* a zone/queue
+    # polygon before an exit is confirmed. A footpoint jittering across a polygon edge for a
+    # frame or two is detector noise, not a person leaving -- without this,
+    # one person standing at an edge produced a stream of sub-second
+    # enter/exit pairs (and, on billing cameras, a fresh queue JOIN every
+    # time). 0 keeps the original "first outside frame exits" behavior.
+    exit_grace_seconds: float = 0.0
+    # Set by the P9 worker to also render an annotated copy of the video;
+    # never affects which events are generated.
+    annotation: AnnotationRequest | None = field(default=None, compare=False)
 
+
+# Exit debounce applied to every camera built from store configuration (real
+# CCTV). At the pipeline's default 2 fps this is ~4 consecutive sampled
+# frames outside the polygon.
+DEFAULT_EXIT_GRACE_SECONDS = 2.0
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -188,7 +215,7 @@ def _build_config_for_camera(db: Session, camera: Camera, *, video_path: Path) -
                 polygon=tuple(Point(x, y) for x, y in geometry.points),
             )
         )
-        if role == CameraRole.BILLING and queue_zone_id is None:
+        if role == CameraRole.BILLING and queue_zone_id is None and zone.type.value != STAFF_AREA_ZONE_TYPE:
             queue_zone_id = zone.id
 
     return VideoProcessingConfig(
@@ -210,5 +237,6 @@ def _build_config_for_camera(db: Session, camera: Camera, *, video_path: Path) -
         queue_abandonment_seconds=(
             camera.queue_abandonment_seconds if camera.queue_abandonment_seconds is not None else 8
         ),
+        exit_grace_seconds=DEFAULT_EXIT_GRACE_SECONDS,
     )
 

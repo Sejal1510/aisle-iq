@@ -13,6 +13,7 @@ from app.schemas.live_analytics import (
     PeriodComparisonResponse,
     PeriodMetrics,
 )
+from app.services.event_filters import customer_events
 from app.services.occupancy_service import OccupancyService, to_naive
 from app.services.queue_service import QueueService
 
@@ -116,6 +117,7 @@ class ComparisonService:
                 select(func.count(Event.id))
                 .where(Event.store_id == store_id)
                 .where(Event.event_type == event_type)
+                .where(customer_events())
                 .where(Event.timestamp >= start)
                 .where(Event.timestamp < end)
             )

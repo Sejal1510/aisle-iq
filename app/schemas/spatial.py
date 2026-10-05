@@ -6,7 +6,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 
 from app.core.storage import SAFE_IDENTIFIER_PATTERN
-from app.models.enums import ZoneType
+from app.models.enums import Role, ZoneType
+from app.schemas.common import UtcDatetime
 
 # P7 security hardening: store_id is used as a filesystem directory name for
 # onboarding uploads (see app.core.storage.save_upload), and camera_id/
@@ -49,6 +50,21 @@ class CreateStoreRequest(BaseModel):
 class StoreOut(BaseModel):
     store_id: str
     name: str | None = None
+
+
+class StoreUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class AccessibleStoreOut(BaseModel):
+    """One store the caller has been granted access to -- the dashboard's
+    store picker is built from this instead of a hardcoded id list."""
+
+    store_id: str
+    name: str | None = None
+    role: Role
+    event_count: int
+    last_event_timestamp: UtcDatetime | None = None
 
 
 class MapOut(BaseModel):

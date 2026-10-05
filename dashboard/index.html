@@ -3,20 +3,20 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Store Intelligence Dashboard</title>
+    <title>AisleIQ · Store Analytics</title>
     <link rel="stylesheet" href="/dashboard/styles.css">
   </head>
   <body>
     <div class="login-gate" id="login-gate">
       <form class="login-card" id="login-form">
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true">SI</span>
+          <span class="brand-mark" aria-hidden="true">IQ</span>
           <div>
-            <p class="eyebrow">Retail Intelligence</p>
-            <h1>Store Command</h1>
+            <p class="eyebrow">Retail store analytics</p>
+            <h1>AisleIQ</h1>
           </div>
         </div>
-        <p class="login-subtitle">Sign in to view store analytics.</p>
+        <p class="login-subtitle">Sign in to view your stores.</p>
         <label for="login-email">Email</label>
         <input type="email" id="login-email" name="email" autocomplete="username" required>
         <label for="login-password">Password</label>
@@ -29,21 +29,24 @@
     <div class="app-shell" id="app-shell" hidden>
       <aside class="sidebar" aria-label="Dashboard navigation">
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true">SI</span>
+          <span class="brand-mark" aria-hidden="true">IQ</span>
           <div>
-            <p class="eyebrow">Retail Intelligence</p>
-            <h1>Store Command</h1>
+            <p class="eyebrow">Retail store analytics</p>
+            <h1>AisleIQ</h1>
           </div>
         </div>
         <nav class="nav-tabs" aria-label="Dashboard views">
           <button class="tab-button is-active" type="button" data-view="overview">Overview</button>
-          <button class="tab-button" type="button" data-view="funnel">Funnel</button>
-          <button class="tab-button" type="button" data-view="paths">Paths</button>
+          <button class="tab-button" type="button" data-view="zone-map">Store Map</button>
+          <button class="tab-button" type="button" data-view="video-processing">Video Analysis</button>
+          <button class="tab-button" type="button" data-view="paths">Customer Journey</button>
           <button class="tab-button" type="button" data-view="insights">Insights</button>
-          <button class="tab-button" type="button" data-view="comparison">Store Comparison</button>
+        </nav>
+        <nav class="nav-tabs nav-tabs--secondary" aria-label="More views">
+          <p class="nav-heading">More</p>
           <button class="tab-button" type="button" data-view="live-analytics">Live Analytics</button>
-          <button class="tab-button" type="button" data-view="zone-map">Zone Map</button>
-          <button class="tab-button" type="button" data-view="video-processing">Video Processing</button>
+          <button class="tab-button" type="button" data-view="funnel">Funnel</button>
+          <button class="tab-button" type="button" data-view="comparison">Store Comparison</button>
           <button class="tab-button" type="button" data-view="replay">Replay</button>
         </nav>
       </aside>
@@ -51,15 +54,14 @@
       <main class="content">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Live analytics</p>
+            <p class="eyebrow" id="page-store-name">AisleIQ</p>
             <h2 id="page-title">Overview</h2>
           </div>
           <form class="store-form" id="store-form">
             <label for="store-id">Store</label>
             <div class="store-controls">
               <select id="store-id" name="storeId">
-                <option value="ST1001" selected>ST1001</option>
-                <option value="ST1002">ST1002</option>
+                <option value="" disabled selected>Loading stores…</option>
               </select>
               <button type="submit">Refresh</button>
               <button type="button" id="logout-button">Sign out</button>
@@ -70,30 +72,12 @@
         <section class="status-banner" id="status-banner" hidden></section>
 
         <section class="view is-active" id="overview-view" data-view-panel="overview">
-          <div class="kpi-grid" id="kpi-grid"></div>
-
-          <section class="panel heatmap-panel">
-            <div class="panel-header">
-              <div>
-                <h3>Store Heatmap</h3>
-                <p>Hotspot density from generated CCTV events.</p>
-              </div>
-              <span id="heatmap-summary">0 points</span>
-            </div>
-            <div class="heatmap-stage" id="heatmap-stage">
-              <div class="heatmap-empty">No heatmap data available.</div>
-            </div>
-            <div class="heatmap-legend" aria-label="Heatmap intensity legend">
-              <span>Low</span>
-              <i></i>
-              <span>High</span>
-            </div>
-          </section>
+          <div class="kpi-grid kpi-grid--overview" id="kpi-grid"></div>
 
           <div class="section-grid">
             <section class="panel">
               <div class="panel-header">
-                <h3>Zone Dwell</h3>
+                <h3>Zone Activity</h3>
                 <span id="zone-count">0 zones</span>
               </div>
               <div class="table-wrap">
@@ -118,17 +102,28 @@
               </div>
               <div class="revenue-block">
                 <span id="revenue-large">INR 0</span>
-                <p>Attributed to matched visitor and POS correlations.</p>
+                <p id="revenue-caption">Attributed to matched visitor and POS correlations.</p>
               </div>
             </section>
           </div>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Top Insights</h3>
+              <button type="button" class="link-button" data-view-link="insights">View all</button>
+            </div>
+            <div class="insights-list insights-list--compact" id="overview-insights"></div>
+          </section>
         </section>
 
         <section class="view" id="funnel-view" data-view-panel="funnel">
           <section class="panel">
             <div class="panel-header">
-              <h3>Conversion Funnel</h3>
-              <span id="funnel-store-label">ST1001</span>
+              <div>
+                <h3>Conversion Funnel</h3>
+                <p id="funnel-basis"></p>
+              </div>
+              <span id="funnel-store-label"></span>
             </div>
             <div class="funnel-track" id="funnel-track"></div>
           </section>
@@ -137,7 +132,10 @@
         <section class="view" id="paths-view" data-view-panel="paths">
           <section class="panel">
             <div class="panel-header">
-              <h3>Customer Paths</h3>
+              <div>
+                <h3>Customer Journey</h3>
+                <p>Zone sequences followed by tracked customers. Each camera tracks people independently, so a journey covers what one camera saw.</p>
+              </div>
               <span id="paths-count">0 journeys</span>
             </div>
             <div class="path-grid">
@@ -171,7 +169,7 @@
           <section class="panel">
             <div class="panel-header">
               <h3>Store Comparison</h3>
-              <span>ST1001 / ST1002</span>
+              <span id="comparison-store-count">All stores</span>
             </div>
             <div class="comparison-grid" id="comparison-grid"></div>
           </section>
@@ -275,7 +273,7 @@
             <div class="panel-header">
               <div>
                 <h3>Zone Activity Map</h3>
-                <p>Relative visitor activity per configured zone, shaded on your store map. This shows aggregated zone-level activity, not the exact position of individual customers.</p>
+                <p>Visitor activity per zone, shaded on the store floor plan. Activity is aggregated per zone &mdash; it does not show where individual customers stood.</p>
               </div>
               <div class="zone-map-metric">
                 <label for="zone-map-metric">Shade by</label>
@@ -292,7 +290,7 @@
 
             <div class="zone-map-layout" id="zone-map-content">
               <div class="zone-map-stage" id="zone-map-stage">
-                <div class="heatmap-empty">No zone map data available.</div>
+                <div class="heatmap-empty">Loading floor plan…</div>
               </div>
               <div class="zone-map-side">
                 <div class="panel-header">
@@ -303,14 +301,85 @@
               </div>
             </div>
           </section>
+
+          <div class="section-grid section-grid--even">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h3>Cameras</h3>
+                  <p>What each camera covers. Camera positions are not marked on this floor plan.</p>
+                </div>
+                <span id="camera-count">0 cameras</span>
+              </div>
+              <div class="camera-list" id="camera-list"></div>
+            </section>
+
+            <section class="panel heatmap-panel">
+              <div class="panel-header">
+                <div>
+                  <h3>Camera-View Heatmap</h3>
+                  <p>Where people were detected inside the camera frames, all cameras combined. These are positions in the camera image, not on the floor plan.</p>
+                </div>
+                <span id="heatmap-summary">0 points</span>
+              </div>
+              <div class="heatmap-stage" id="heatmap-stage">
+                <div class="heatmap-empty">No heatmap data available.</div>
+              </div>
+              <div class="heatmap-legend" aria-label="Heatmap intensity legend">
+                <span>Low</span>
+                <i></i>
+                <span>High</span>
+              </div>
+            </section>
+          </div>
         </section>
 
         <section class="view" id="video-processing-view" data-view-panel="video-processing">
+          <section class="panel video-player-panel" id="video-result-panel" hidden>
+            <div class="panel-header">
+              <div>
+                <h3>AisleIQ Video Analysis</h3>
+                <p id="video-result-camera">&mdash;</p>
+              </div>
+              <span class="status-pill" id="video-result-status">&mdash;</span>
+            </div>
+            <div class="video-player-layout">
+              <div class="video-player-stage" id="video-player-stage">
+                <div class="video-player-empty">Select a completed analysis below to play it.</div>
+              </div>
+              <div class="video-summary" id="video-result-kpis"></div>
+            </div>
+            <div class="replay-errors" id="video-result-errors"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Recent Analyses</h3>
+              <span id="video-jobs-count">0 jobs</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Created</th>
+                    <th>Camera</th>
+                    <th>Status</th>
+                    <th>Events</th>
+                    <th>People Tracked</th>
+                    <th>Processing Time</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="video-jobs-body"></tbody>
+              </table>
+            </div>
+          </section>
+
           <section class="panel">
             <div class="panel-header">
               <div>
-                <h3>Process CCTV Video</h3>
-                <p>Upload a camera's recorded footage, then queue it for detection/tracking. Uploading requires admin access; starting a job requires manager access. Max upload size 2&nbsp;GB (.mp4, .mov, .avi, .mkv).</p>
+                <h3>Analyse New Footage</h3>
+                <p>Upload a camera's recorded footage, then run person detection and tracking on it. Supported: .mp4, .mov, .avi, .mkv up to 2&nbsp;GB.</p>
               </div>
             </div>
 
@@ -328,41 +397,9 @@
             <p class="video-success" id="video-upload-success" hidden></p>
 
             <form class="video-form" id="video-job-form">
-              <button type="submit" id="video-job-button">Create Processing Job</button>
+              <button type="submit" id="video-job-button">Analyse Video</button>
             </form>
             <p class="video-error" id="video-job-error" hidden></p>
-          </section>
-
-          <section class="panel" id="video-result-panel" hidden>
-            <div class="panel-header">
-              <h3>Latest Job</h3>
-              <span id="video-result-status">&mdash;</span>
-            </div>
-            <div class="kpi-grid" id="video-result-kpis"></div>
-            <div class="replay-errors" id="video-result-errors"></div>
-          </section>
-
-          <section class="panel">
-            <div class="panel-header">
-              <h3>Recent Processing Jobs</h3>
-              <span id="video-jobs-count">0 jobs</span>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Created</th>
-                    <th>Camera</th>
-                    <th>Status</th>
-                    <th>Total</th>
-                    <th>Accepted</th>
-                    <th>Duplicate</th>
-                    <th>Failed</th>
-                  </tr>
-                </thead>
-                <tbody id="video-jobs-body"></tbody>
-              </table>
-            </div>
           </section>
         </section>
 
@@ -371,7 +408,7 @@
             <div class="panel-header">
               <div>
                 <h3>Replay Raw Events</h3>
-                <p>Reprocess historical CCTV events through the same ingestion/analytics pipeline as live traffic. Requires manager access; safe to re-run.</p>
+                <p>Reprocess historical events through the same ingestion and analytics pipeline. Safe to re-run.</p>
               </div>
             </div>
             <form class="replay-form" id="replay-form">

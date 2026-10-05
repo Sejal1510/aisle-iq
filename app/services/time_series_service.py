@@ -15,6 +15,7 @@ from app.schemas.live_analytics import (
     HourlyQueueActivityResponse,
     QueueActivityBucket,
 )
+from app.services.event_filters import customer_events
 from app.services.occupancy_service import to_naive
 
 
@@ -96,6 +97,7 @@ class TimeSeriesService:
                     [EventType.BILLING_QUEUE_JOIN, EventType.QUEUE_COMPLETED, EventType.QUEUE_ABANDONED]
                 )
             )
+            .where(customer_events())
             .where(Event.timestamp >= start)
             .where(Event.timestamp < end)
         ).all()

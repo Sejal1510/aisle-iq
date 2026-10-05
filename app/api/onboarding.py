@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -23,11 +24,13 @@ from app.core.storage import (
     save_upload,
 )
 from app.db.session import get_db
-from app.models.auth import User
+from app.models.auth import StoreAccess, User
 from app.models.enums import Role
+from app.models.event import Event
 from app.models.spatial import GEOMETRY_KIND_LINE, GEOMETRY_KIND_POLYGON
 from app.models.store import Camera, Store, Zone
 from app.schemas.spatial import (
+    AccessibleStoreOut,
     CameraCreateRequest,
     CameraOut,
     CameraUpdateRequest,
@@ -37,6 +40,7 @@ from app.schemas.spatial import (
     GeometryOut,
     MapOut,
     StoreOut,
+    StoreUpdateRequest,
     ZoneCreateRequest,
     ZoneOut,
     ZoneUpdateRequest,
@@ -88,6 +92,47 @@ def create_store(
     db.add(store)
     db.flush()
     grant_store_access(db, user.id, store.id, Role.ADMIN)
+    db.commit()
+    return StoreOut(store_id=store.id, name=store.name)
+
+
+@router.get("/stores", response_model=list[AccessibleStoreOut])
+def list_accessible_stores(db: Session = Depends(get_db), user: User = Depends(require_user)) -> list[AccessibleStoreOut]:
+    """Stores the caller has been granted access to, with enough activity
+    information (event count, latest event) for a client to pick a store
+    that actually has data. Scoped to the caller's own StoreAccess grants --
+    it never reveals a store the caller can't already open."""
+    grants = db.execute(
+        select(StoreAccess, Store).join(Store, Store.id == StoreAccess.store_id).where(StoreAccess.user_id == user.id)
+    ).all()
+    activity = {
+        store_id: (count, latest)
+        for store_id, count, latest in db.execute(
+            select(Event.store_id, func.count(Event.id), func.max(Event.timestamp))
+            .where(Event.store_id.in_([grant.store_id for grant, _ in grants]))
+            .group_by(Event.store_id)
+        ).all()
+    }
+    return [
+        AccessibleStoreOut(
+            store_id=store.id,
+            name=store.name,
+            role=grant.role,
+            event_count=activity.get(store.id, (0, None))[0],
+            last_event_timestamp=activity.get(store.id, (0, None))[1],
+        )
+        for grant, store in sorted(grants, key=lambda row: row[1].id)
+    ]
+
+
+@router.patch("/stores/{store_id}", response_model=StoreOut)
+def update_store(
+    store_id: str, payload: StoreUpdateRequest, db: Session = Depends(get_db), access=_write_access
+) -> StoreOut:
+    store = db.get(Store, store_id)
+    if store is None:
+        raise HTTPException(status_code=404, detail="Store not found.")
+    store.name = payload.name.strip()
     db.commit()
     return StoreOut(store_id=store.id, name=store.name)
 

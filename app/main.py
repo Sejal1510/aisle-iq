@@ -2,6 +2,7 @@ import json
 import re
 import time
 from contextlib import asynccontextmanager
+from datetime import UTC
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.db.session import SessionLocal, init_db
 from app.models.event import Event
+from app.schemas.common import utc_isoformat
 
 settings = get_settings()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -207,9 +209,12 @@ async def health_check():
             ).all()
             now = time.time()
             for store_id, last_timestamp in last_events:
-                timestamp_text = last_timestamp.isoformat() if last_timestamp else None
+                # Stored timestamps are naive UTC; mark them as UTC on the way
+                # out (and when comparing to wall-clock time) so clients and
+                # the staleness check don't read them as server-local time.
+                timestamp_text = utc_isoformat(last_timestamp) if last_timestamp else None
                 status = "ok"
-                if last_timestamp and now - last_timestamp.timestamp() > 600:
+                if last_timestamp and now - last_timestamp.replace(tzinfo=UTC).timestamp() > 600:
                     status = "STALE_FEED"
                     warnings.append({"store_id": store_id, "warning": "STALE_FEED"})
                 stores[store_id] = {"last_event_timestamp": timestamp_text, "status": status}

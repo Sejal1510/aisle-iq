@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from pydantic import BaseModel, Field
 
 from app.models.replay import ReplaySourceType, ReplayStatus
+from app.schemas.common import UtcDatetime
 
 
 class ReplayCreateRequest(BaseModel):
     source_type: ReplaySourceType = ReplaySourceType.RAW_EVENT_ARCHIVE
     source_ref: str | None = None
-    range_start: datetime | None = None
-    range_end: datetime | None = None
+    range_start: UtcDatetime | None = None
+    range_end: UtcDatetime | None = None
     event_ids: list[str] | None = Field(
         default=None,
         description="Optional explicit set of RawEvent ids to replay (raw_event_archive source only). "
@@ -24,8 +23,8 @@ class ReplayJobOut(BaseModel):
     store_id: str
     source_type: ReplaySourceType
     source_ref: str | None
-    range_start: datetime | None
-    range_end: datetime | None
+    range_start: UtcDatetime | None
+    range_end: UtcDatetime | None
     status: ReplayStatus
     total_events: int
     processed_events: int
@@ -34,9 +33,9 @@ class ReplayJobOut(BaseModel):
     failed_events: int
     error_message: str | None
     error_details: list[dict] = Field(default_factory=list)
-    started_at: datetime
-    completed_at: datetime | None
-    created_at: datetime
+    started_at: UtcDatetime
+    completed_at: UtcDatetime | None
+    created_at: UtcDatetime
 
 
 class ReplayJobListResponse(BaseModel):

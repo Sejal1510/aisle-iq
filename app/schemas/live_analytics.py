@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from pydantic import BaseModel, Field
+
+from app.schemas.common import UtcDatetime
 
 # ---------------------------------------------------------------------------
 # Occupancy (P3.1)
@@ -11,19 +11,19 @@ from pydantic import BaseModel, Field
 
 class CurrentOccupancyResponse(BaseModel):
     store_id: str
-    as_of: datetime
+    as_of: UtcDatetime
     occupancy: int
 
 
 class OccupancyPoint(BaseModel):
-    bucket_start: datetime
+    bucket_start: UtcDatetime
     occupancy: int
 
 
 class OccupancyHistoryResponse(BaseModel):
     store_id: str
-    start: datetime
-    end: datetime
+    start: UtcDatetime
+    end: UtcDatetime
     bucket_minutes: int
     points: list[OccupancyPoint] = Field(default_factory=list)
 
@@ -36,21 +36,21 @@ class OccupancyHistoryResponse(BaseModel):
 class QueuedEntity(BaseModel):
     tracked_entity_id: str
     queue_event_id: str
-    joined_at: datetime
+    joined_at: UtcDatetime
     waiting_seconds: int
 
 
 class CurrentQueueResponse(BaseModel):
     store_id: str
-    as_of: datetime
+    as_of: UtcDatetime
     queue_length: int
     queued_entities: list[QueuedEntity] = Field(default_factory=list)
 
 
 class QueueMetricsResponse(BaseModel):
     store_id: str
-    start: datetime
-    end: datetime
+    start: UtcDatetime
+    end: UtcDatetime
     completed_visits: int
     abandoned_visits: int
     abandonment_rate: float
@@ -64,19 +64,19 @@ class QueueMetricsResponse(BaseModel):
 
 
 class FootfallBucket(BaseModel):
-    bucket_start: datetime
+    bucket_start: UtcDatetime
     entries: int
 
 
 class HourlyFootfallResponse(BaseModel):
     store_id: str
-    start: datetime
-    end: datetime
+    start: UtcDatetime
+    end: UtcDatetime
     buckets: list[FootfallBucket] = Field(default_factory=list)
 
 
 class QueueActivityBucket(BaseModel):
-    bucket_start: datetime
+    bucket_start: UtcDatetime
     joined: int
     completed: int
     abandoned: int
@@ -84,8 +84,8 @@ class QueueActivityBucket(BaseModel):
 
 class HourlyQueueActivityResponse(BaseModel):
     store_id: str
-    start: datetime
-    end: datetime
+    start: UtcDatetime
+    end: UtcDatetime
     buckets: list[QueueActivityBucket] = Field(default_factory=list)
 
 
@@ -95,15 +95,15 @@ class HourlyQueueActivityResponse(BaseModel):
 
 
 class PeakHourBucket(BaseModel):
-    bucket_start: datetime
+    bucket_start: UtcDatetime
     entries: int
     rank: int
 
 
 class PeakHoursResponse(BaseModel):
     store_id: str
-    start: datetime
-    end: datetime
+    start: UtcDatetime
+    end: UtcDatetime
     peak_hour: PeakHourBucket | None = None
     ranked_hours: list[PeakHourBucket] = Field(default_factory=list)
 
@@ -114,8 +114,8 @@ class PeakHoursResponse(BaseModel):
 
 
 class PeriodMetrics(BaseModel):
-    start: datetime
-    end: datetime
+    start: UtcDatetime
+    end: UtcDatetime
     footfall: int
     unique_visitors: int
     queue_joined: int

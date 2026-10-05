@@ -123,11 +123,21 @@ class AnomalyService:
         if wait_seconds < 120 and abandonment_rate < 0.30:
             return []
         severity = "CRITICAL" if wait_seconds >= 300 or abandonment_rate >= 0.50 else "WARN"
+        message = "Billing queue wait or abandonment is above the operating threshold."
+        queue_visits = self.analytics.queue_visit_count(store_id)
+        if queue_visits < _QUEUE_MIN_SAMPLE:
+            # Same minimum sample the trend rules already use: a rate over a
+            # handful of visits is noted, never escalated.
+            severity = "INFO"
+            message = (
+                f"Billing queue abandonment/wait is above threshold, but based on only {queue_visits} "
+                "queue visit(s) -- too few to act on yet."
+            )
         return [
             StoreAnomaly(
                 anomaly_type="queue_spike",
                 severity=severity,
-                message="Billing queue wait or abandonment is above the operating threshold.",
+                message=message,
                 suggested_action="Open another billing counter and move floor staff to checkout until the queue normalizes.",
                 metric_value=max(wait_seconds, abandonment_rate),
             )
@@ -135,7 +145,8 @@ class AnomalyService:
 
     def _conversion_drop(self, store_id: str) -> list[StoreAnomaly]:
         metrics = self.analytics.get_store_metrics(store_id)
-        if metrics.total_visitors < 5 or metrics.conversion_rate >= 0.10:
+        if not metrics.has_pos_data or metrics.total_visitors < 5 or metrics.conversion_rate >= 0.10:
+            # No POS data means conversion is unknown, not low.
             return []
         return [
             StoreAnomaly(
@@ -148,14 +159,24 @@ class AnomalyService:
         ]
 
     def _dead_zone(self, store_id: str) -> list[StoreAnomaly]:
-        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=30)
+        # "The last 30 minutes" is measured back from the store's latest
+        # recorded event -- the same "as of" basis every other current metric
+        # uses -- not from wall-clock time, which would flag every zone of a
+        # processed recording as dead the moment the video is 30 minutes old.
+        latest = self.db.scalar(select(func.max(Event.timestamp)).where(Event.store_id == store_id))
+        reference = latest if latest is not None else datetime.now(UTC).replace(tzinfo=None)
+        cutoff = reference - timedelta(minutes=30)
         visited_zone_ids = set(
             self.db.scalars(
                 select(Event.zone_id)
                 .where(Event.store_id == store_id)
                 .where(Event.zone_id.is_not(None))
                 .where(Event.timestamp >= cutoff)
-                .where(Event.event_type.in_([EventType.ZONE_ENTERED, EventType.ZONE_DWELL]))
+                .where(
+                    Event.event_type.in_(
+                        [EventType.ZONE_ENTERED, EventType.ZONE_DWELL, EventType.BILLING_QUEUE_JOIN]
+                    )
+                )
                 .distinct()
             ).all()
         )
@@ -173,7 +194,7 @@ class AnomalyService:
             StoreAnomaly(
                 anomaly_type="dead_zone",
                 severity="INFO",
-                message=f"No visits recorded in {zone_id} during the last 30 minutes.",
+                message=f"No visits recorded in {zone_id} during the 30 minutes before the latest recorded activity.",
                 suggested_action="Check camera coverage, sightlines, signage, and merchandising for this zone.",
                 metric_value=0,
             )

@@ -32,7 +32,7 @@ select {
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 248px minmax(0, 1fr);
 }
 
 /* The [hidden] attribute is how JS toggles the login gate vs. app shell
@@ -126,11 +126,49 @@ h3 {
   color: #312d27;
 }
 
+.nav-tabs--secondary {
+  margin-top: auto;
+  gap: 4px;
+}
+
+.nav-tabs--secondary .tab-button {
+  border-color: transparent;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  color: rgba(255, 250, 242, 0.72);
+}
+
+.nav-tabs--secondary .tab-button.is-active,
+.nav-tabs--secondary .tab-button:hover {
+  color: #312d27;
+}
+
+.nav-heading {
+  margin: 0 0 4px 12px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  color: rgba(255, 250, 242, 0.5);
+}
+
+.link-button {
+  border: 0;
+  background: none;
+  color: var(--green);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
 .content {
   padding: 28px;
   display: grid;
   gap: 20px;
   align-content: start;
+  min-width: 0;
 }
 
 .topbar {
@@ -207,6 +245,14 @@ h3 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
+}
+
+.kpi-grid--overview {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.kpi-grid--overview .kpi-card {
+  min-height: 118px;
 }
 
 .kpi-card,
@@ -308,6 +354,31 @@ th {
   border-radius: 8px;
   border: 1px solid var(--line);
   background: #e9e3d8;
+}
+
+/* Camera-frame canvas for the hotspot heatmap: a fixed frame proportion with
+   a light grid, so points are never squashed and never sit on a floor plan
+   they don't belong to. */
+.heatmap-frame {
+  aspect-ratio: 8 / 9;
+  max-height: 420px;
+  margin: 0 auto;
+  background-color: #2f2c28;
+  background-image:
+    linear-gradient(rgba(255, 250, 242, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 250, 242, 0.08) 1px, transparent 1px);
+  background-size: 12.5% 12.5%;
+}
+
+.heatmap-frame + .heatmap-layer {
+  left: 50%;
+  right: auto;
+  width: min(100%, calc(420px * 8 / 9));
+  transform: translateX(-50%);
+}
+
+.heatmap-frame + .heatmap-layer .heatmap-point {
+  mix-blend-mode: screen;
 }
 
 .heatmap-layout {
@@ -427,6 +498,55 @@ th {
   stroke: rgba(40, 30, 20, 0.55);
   stroke-width: 0.004;
   cursor: default;
+}
+
+.zone-map-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.zone-map-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--line);
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.camera-list {
+  display: grid;
+  gap: 8px;
+}
+
+.camera-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-alt);
+}
+
+.camera-item div {
+  display: grid;
+  gap: 2px;
+}
+
+.camera-item small,
+.camera-item span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.camera-item span {
+  text-align: right;
 }
 
 .zone-map-side {
@@ -562,6 +682,10 @@ th {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.insights-list--compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .path-grid {
@@ -884,6 +1008,86 @@ th {
   cursor: not-allowed;
 }
 
+.video-player-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 16px;
+  align-items: start;
+}
+
+.video-player-stage {
+  background: #1f1d1a;
+  border-radius: 8px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  min-height: 360px;
+}
+
+.video-player-stage video {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  background: #1f1d1a;
+}
+
+.video-player-empty {
+  color: rgba(255, 250, 242, 0.7);
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.video-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.video-stat {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 4px;
+  background: var(--surface-alt);
+}
+
+.video-stat span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.video-stat strong {
+  font-size: 1.5rem;
+}
+
+.video-stat small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.status-pill {
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-weight: 700;
+  background: var(--surface-alt);
+}
+
+.status-pill[data-status="completed"] {
+  background: #e3f1ec;
+  color: var(--green);
+}
+
+.status-pill[data-status="failed"] {
+  background: #fbe9e6;
+  color: var(--coral);
+}
+
+.video-job-row.is-selected td {
+  background: #f4f0e8;
+}
+
 .video-error {
   color: var(--coral);
   font-size: 0.84rem;
@@ -1099,7 +1303,10 @@ th {
 
   .nav-tabs,
   .kpi-grid,
+  .kpi-grid--overview,
   .kpi-grid--analytics,
+  .insights-list--compact,
+  .video-player-layout,
   .section-grid,
   .section-grid--even,
   .funnel-track,

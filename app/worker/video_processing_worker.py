@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from typing import Any
 
 import structlog
@@ -10,12 +11,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.storage import VIDEOS_DIR
 from app.models.event import Event
 from app.models.video_processing import VideoProcessingJob
 from app.schemas.event import EventPayload
 from app.services.event_ingestion_service import EventIngestionService
 from app.services.video_processing_service import EventOutcome, VideoProcessingService
+from app.services.video_run_finalizer import VideoRunFinalizer
 from app.services.visitor_inference_service import VisitorInferenceService
+from pipeline.video.annotation import (
+    AnnotationRequest,
+    annotated_output_paths,
+    write_run_summary,
+)
 from pipeline.video.config import VideoProcessingConfig
 from pipeline.video.processing import process_camera
 from pipeline.video.tracking import UltralyticsByteTracker
@@ -136,7 +144,7 @@ class VideoProcessingWorker:
         same way, without conflating it with a CV-level crash.
         """
         try:
-            config = self.service.get_config(job)
+            config = replace(self.service.get_config(job), annotation=self._annotation_request(job))
             # get_config only reads (Camera/CameraCoverage/Zone lookups),
             # but SQLAlchemy's session autobegin still leaves an implicit
             # transaction open after those SELECTs. Ending it here -- before
@@ -168,6 +176,8 @@ class VideoProcessingWorker:
         # block above already established, must not escape and take down
         # run_forever() either.
         try:
+            if config.annotation is not None:
+                self._finalize_video_run(job, config)
             if touched_store:
                 VisitorInferenceService(self.db).infer_store(job.store_id)
                 self.db.commit()
@@ -175,6 +185,42 @@ class VideoProcessingWorker:
             self._mark_terminal_status(job)
         except Exception as exc:  # noqa: BLE001 - isolate this job, keep the worker alive for the next one
             self._fail_after_finalization(job, exc)
+
+    @staticmethod
+    def _annotation_request(job: VideoProcessingJob) -> AnnotationRequest:
+        output_stem, _summary_path = annotated_output_paths(VIDEOS_DIR, job.store_id, job.id)
+        return AnnotationRequest(output_stem=output_stem)
+
+    def _finalize_video_run(self, job: VideoProcessingJob, config: VideoProcessingConfig) -> None:
+        """The video has ended: close sessions at each person's last
+        observed time, classify staff from the camera's configured staff
+        area (see VideoRunFinalizer), and persist the run's tracker statistics next to
+        the annotated video. A run whose tracker never produced a frame
+        (nothing decoded) has nothing to finalize."""
+        stats = config.annotation.stats
+        if stats.frames_sampled == 0:
+            return
+        result = VideoRunFinalizer(self.db).finalize(
+            store_id=job.store_id,
+            camera_id=job.camera_id,
+            track_last_seen=stats.track_last_seen,
+            track_frames=stats.track_frames,
+            track_staff_area_frames=stats.track_staff_area_frames,
+        )
+        self.db.commit()
+        stats.staff_tracks = list(result.staff_tracks)
+        logger.info(
+            "video_worker_run_finalized",
+            job_id=job.id,
+            sessions_closed=result.sessions_closed,
+            staff_tracks=len(result.staff_tracks),
+            annotated_file=stats.annotated_file,
+        )
+        _output_stem, summary_path = annotated_output_paths(VIDEOS_DIR, job.store_id, job.id)
+        try:
+            write_run_summary(summary_path, stats)
+        except OSError as exc:
+            logger.warning("video_worker_run_summary_unwritable", job_id=job.id, error=str(exc))
 
     def _fail_after_finalization(self, job: VideoProcessingJob, exc: Exception) -> None:
         """Best-effort recovery when finalization (visitor inference or the

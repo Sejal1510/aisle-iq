@@ -16,6 +16,7 @@ from app.schemas.analytics import (
     StoreMetricsResponse,
     ZoneDwellMetric,
 )
+from app.services.event_filters import customer_events
 
 
 @dataclass
@@ -48,10 +49,19 @@ class AnalyticsService:
             attributed_revenue=self.attributed_revenue(store_id),
             attributed_transactions=attributed_transactions,
             zone_dwell_metrics=self.zone_dwell_metrics(store_id),
+            footfall=self.footfall(store_id),
+            queue_visits=self.queue_visit_count(store_id),
+            has_pos_data=self.has_pos_data(store_id),
         )
 
     def get_store_funnel(self, store_id: str) -> StoreFunnelResponse:
-        visitors = self.total_visitors(store_id)
+        # Prefer real entrance-line crossings as the top of the funnel. Only a
+        # store without any entrance-camera ENTRY events falls back to
+        # camera-scoped visit sessions (which overcount people seen by more
+        # than one camera).
+        footfall = self.footfall(store_id)
+        visitor_basis = "store_entries" if footfall else "tracked_sessions"
+        visitors = footfall if footfall else self.total_visitors(store_id)
         queue_join = self.queue_join_count(store_id)
         queue_complete = self.queue_complete_count(store_id)
         purchase = self.attributed_transaction_count(store_id)
@@ -90,7 +100,25 @@ class AnalyticsService:
             queue_complete=queue_complete,
             purchase=purchase,
             steps=steps,
+            visitor_basis=visitor_basis,
         )
+
+    def footfall(self, store_id: str) -> int:
+        return self._scalar_int(
+            select(func.count(Event.id))
+            .join(TrackedEntity, TrackedEntity.id == Event.tracked_entity_id)
+            .where(Event.store_id == store_id)
+            .where(Event.event_type == EventType.ENTRY)
+            .where(TrackedEntity.is_staff.is_not(True))
+        )
+
+    def queue_visit_count(self, store_id: str) -> int:
+        return self._queue_terminal_count(store_id, EventType.QUEUE_COMPLETED) + self._queue_terminal_count(
+            store_id, EventType.QUEUE_ABANDONED
+        )
+
+    def has_pos_data(self, store_id: str) -> bool:
+        return self.db.scalar(select(PosTransaction.id).where(PosTransaction.store_id == store_id).limit(1)) is not None
 
     def total_visitors(self, store_id: str) -> int:
         return self._scalar_int(
@@ -166,6 +194,7 @@ class AnalyticsService:
             .where(Event.store_id == store_id)
             .where(Event.event_type.in_([EventType.QUEUE_COMPLETED, EventType.QUEUE_ABANDONED]))
             .where(Event.wait_seconds.is_not(None))
+            .where(customer_events())
         )
         return round(float(average or 0.0), 2)
 
@@ -197,6 +226,7 @@ class AnalyticsService:
             select(func.count(func.distinct(Event.session_id)))
             .where(Event.store_id == store_id)
             .where(Event.event_type.in_([EventType.BILLING_QUEUE_JOIN, EventType.QUEUE_COMPLETED, EventType.QUEUE_ABANDONED]))
+            .where(customer_events())
         )
 
     def queue_complete_count(self, store_id: str) -> int:
@@ -204,6 +234,7 @@ class AnalyticsService:
             select(func.count(func.distinct(Event.session_id)))
             .where(Event.store_id == store_id)
             .where(Event.event_type == EventType.QUEUE_COMPLETED)
+            .where(customer_events())
         )
 
     def zone_dwell_metrics(self, store_id: str) -> list[ZoneDwellMetric]:
@@ -212,6 +243,7 @@ class AnalyticsService:
             .where(Event.store_id == store_id)
             .where(Event.zone_id.is_not(None))
             .where(Event.event_type.in_([EventType.ZONE_ENTERED, EventType.ZONE_EXITED]))
+            .where(customer_events())
             .order_by(Event.session_id, Event.zone_id, Event.timestamp)
         ).all()
 
@@ -255,6 +287,7 @@ class AnalyticsService:
             select(func.count(Event.id))
             .where(Event.store_id == store_id)
             .where(Event.event_type == event_type)
+            .where(customer_events())
         )
 
     def _scalar_int(self, statement) -> int:

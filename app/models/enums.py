@@ -28,6 +28,11 @@ class ZoneType(str, enum.Enum):
     CHECKOUT = "CHECKOUT"
     ENTRY_DOOR = "ENTRY_DOOR"
     OTHER = "OTHER"
+    # Operator-drawn area where only staff stand (e.g. behind a till). A
+    # camera-frame coverage polygon of this type is what classifies a track
+    # as staff -- see app.services.video_run_finalizer. Never a shopping
+    # zone: no zone-visit events are generated for it.
+    STAFF_AREA = "STAFF_AREA"
 
 class Role(str, enum.Enum):
     ADMIN = "admin"

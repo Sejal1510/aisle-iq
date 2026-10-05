@@ -13,6 +13,11 @@ from app.services.analytics_service import AnalyticsService
 SEVERITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 
 
+# Below this many resolved (completed + abandoned) queue visits, queue
+# findings are reported as LOW with the sample size, never HIGH/MEDIUM.
+MIN_QUEUE_VISITS_FOR_ACTION = 5
+
+
 class InsightsService:
     """Convert deterministic analytics thresholds into retail recommendations."""
 
@@ -37,6 +42,18 @@ class InsightsService:
         )
 
     def _queue_insights(self, metrics: StoreMetricsResponse) -> list[StoreInsight]:
+        insights = self._raw_queue_insights(metrics)
+        if metrics.queue_visits >= MIN_QUEUE_VISITS_FOR_ACTION:
+            return insights
+        # Too few resolved queue visits to justify a HIGH/MEDIUM call: keep
+        # the observation, but as LOW and with the sample size stated.
+        sample = f" Based on only {metrics.queue_visits} completed or abandoned queue visit(s) -- too few to act on yet."
+        return [
+            insight.model_copy(update={"severity": "LOW", "explanation": insight.explanation + sample})
+            for insight in insights
+        ]
+
+    def _raw_queue_insights(self, metrics: StoreMetricsResponse) -> list[StoreInsight]:
         insights: list[StoreInsight] = []
         abandonment = metrics.queue_abandonment_rate
         if abandonment >= 0.30:
@@ -142,6 +159,10 @@ class InsightsService:
     ) -> list[StoreInsight]:
         insights: list[StoreInsight] = []
         conversion = metrics.conversion_rate
+        if not metrics.has_pos_data:
+            # No POS transactions for this store at all: conversion is
+            # unknown, not 0%, so no conversion finding can be made.
+            return insights
         if conversion >= 0.35:
             insights.append(
                 StoreInsight(

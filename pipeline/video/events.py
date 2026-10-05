@@ -29,6 +29,20 @@ class QueueState:
     # terminal event's own deterministic event_id include a frame_index
     # without needing one passed in at that point.
     last_seen_frame_index: int
+    # First timestamp the track was seen *outside* the queue polygon after
+    # being inside -- the candidate exit time while the exit_grace_seconds
+    # debounce decides whether it's a real exit or edge jitter.
+    pending_exit_at: datetime | None = None
+
+
+@dataclass
+class ZoneVisitState:
+    """One track's open visit to one zone. last_inside is the most recent
+    snapshot inside the polygon; pending_exit is the first snapshot seen
+    outside it since then (None while the track is still inside)."""
+
+    last_inside: TrackSnapshot
+    pending_exit: TrackSnapshot | None = None
 
 
 class VideoEventGenerator:
@@ -36,7 +50,7 @@ class VideoEventGenerator:
         self.config = config
         self._entry_side_by_track: dict[str, bool] = {}
         self._last_exit_by_track: dict[str, datetime] = {}
-        self._inside_zones_by_track: dict[tuple[str, str], bool] = {}
+        self._zone_visits: dict[tuple[str, str], ZoneVisitState] = {}
         self._active_queue_by_track: dict[str, QueueState] = {}
 
     def process_snapshot(self, snapshot: TrackSnapshot) -> list[dict]:
@@ -49,10 +63,30 @@ class VideoEventGenerator:
         return []
 
     def finalize(self) -> list[dict]:
+        """Close everything still open when a finite video ends.
+
+        A zone visit still open at the end is closed at the moment the track
+        was last actually observed inside the zone (or first observed
+        outside it, if an exit was already pending) -- a real observed
+        timestamp, never the end of the file. Queue visits keep their
+        existing behavior (abandoned at last-seen), except a visit whose exit
+        was already pending is resolved by the normal exit rules at that
+        pending exit time.
+        """
         events: list[dict] = []
+        for (_track_id, zone_id), visit in list(self._zone_visits.items()):
+            zone = next((candidate for candidate in self.config.zones if candidate.id == zone_id), None)
+            if zone is not None:
+                exit_snapshot = visit.pending_exit or visit.last_inside
+                events.append(self._zone_event(snapshot=exit_snapshot, zone=zone, event_type="zone_exited"))
+        self._zone_visits.clear()
+
         for track_id, state in list(self._active_queue_by_track.items()):
-            events.append(self._queue_terminal_event(track_id, state, state.last_seen_at, completed=False))
             del self._active_queue_by_track[track_id]
+            if state.pending_exit_at is not None:
+                events.extend(self._close_queue_visit(track_id, state, state.pending_exit_at))
+            else:
+                events.append(self._queue_terminal_event(track_id, state, state.last_seen_at, completed=False))
         return events
 
     def _process_entry_snapshot(self, snapshot: TrackSnapshot) -> list[dict]:
@@ -80,23 +114,41 @@ class VideoEventGenerator:
         footpoint = _point_from_tuple(snapshot.normalized_footpoint)
 
         for zone in self.config.zones:
+            if zone.is_staff_area:
+                continue  # classification area, not a shopping zone
             key = (snapshot.track_id, zone.id)
             inside = _point_in_polygon(footpoint, zone.polygon)
-            was_inside = self._inside_zones_by_track.get(key, False)
-            self._inside_zones_by_track[key] = inside
+            visit = self._zone_visits.get(key)
 
-            if inside == was_inside:
+            if inside:
+                if visit is None:
+                    self._zone_visits[key] = ZoneVisitState(last_inside=snapshot)
+                    events.append(self._zone_event(snapshot=snapshot, zone=zone, event_type="zone_entered"))
+                else:
+                    # Back inside before the exit was confirmed: edge jitter,
+                    # the visit simply continues.
+                    visit.last_inside = snapshot
+                    visit.pending_exit = None
                 continue
 
-            events.append(
-                self._zone_event(
-                    snapshot=snapshot,
-                    zone=zone,
-                    event_type="zone_entered" if inside else "zone_exited",
-                )
-            )
+            if visit is None:
+                continue
+            if visit.pending_exit is None:
+                visit.pending_exit = snapshot
+            if self._exit_confirmed(visit.last_inside.timestamp, snapshot.timestamp):
+                del self._zone_visits[key]
+                events.append(self._zone_event(snapshot=visit.pending_exit, zone=zone, event_type="zone_exited"))
 
         return events
+
+    def _exit_confirmed(self, last_inside_at: datetime, now: datetime) -> bool:
+        """An exit is real once the track hasn't been seen inside for at
+        least exit_grace_seconds. Measured from the last *inside* sighting
+        (not the first outside one) so sparse sampling -- one frame inside,
+        the next well outside -- still confirms immediately, while a
+        footpoint flickering across an edge between consecutive frames
+        doesn't."""
+        return (now - last_inside_at).total_seconds() >= self.config.exit_grace_seconds
 
     def _process_billing_snapshot(self, snapshot: TrackSnapshot) -> list[dict]:
         queue_zone = self._queue_zone()
@@ -123,18 +175,27 @@ class VideoEventGenerator:
             state.last_seen_at = snapshot.timestamp
             state.hotspot = snapshot.normalized_footpoint
             state.last_seen_frame_index = snapshot.frame_index
+            state.pending_exit_at = None
             return []
 
         if state is None:
             return []
 
+        if state.pending_exit_at is None:
+            state.pending_exit_at = snapshot.timestamp
+        if not self._exit_confirmed(state.last_seen_at, snapshot.timestamp):
+            return []
+
         del self._active_queue_by_track[snapshot.track_id]
-        dwell_seconds = int((snapshot.timestamp - state.joined_at).total_seconds())
+        return self._close_queue_visit(snapshot.track_id, state, state.pending_exit_at)
+
+    def _close_queue_visit(self, track_id: str, state: QueueState, exit_ts: datetime) -> list[dict]:
+        dwell_seconds = int((exit_ts - state.joined_at).total_seconds())
         if dwell_seconds < self.config.queue_abandonment_seconds:
             return []
 
         completed = dwell_seconds >= self.config.queue_completion_seconds
-        return [self._queue_terminal_event(snapshot.track_id, state, snapshot.timestamp, completed=completed)]
+        return [self._queue_terminal_event(track_id, state, exit_ts, completed=completed)]
 
     def _zone_event(self, *, snapshot: TrackSnapshot, zone: PolygonZone, event_type: str) -> dict:
         hotspot_x, hotspot_y = snapshot.normalized_footpoint
@@ -290,7 +351,7 @@ class VideoEventGenerator:
 
     def _queue_zone(self) -> PolygonZone | None:
         if self.config.queue_zone_id is None:
-            return self.config.zones[0] if self.config.zones else None
+            return next((zone for zone in self.config.zones if not zone.is_staff_area), None)
         for zone in self.config.zones:
             if zone.id == self.config.queue_zone_id:
                 return zone
@@ -361,6 +422,10 @@ def _deterministic_uuid(namespace, *parts: object) -> str:
 
 def _video_identity(snapshot: TrackSnapshot) -> str:
     return f"{snapshot.camera_id}:{snapshot.track_id}"
+
+
+def footpoint_in_zone(snapshot: TrackSnapshot, zone: PolygonZone) -> bool:
+    return _point_in_polygon(_point_from_tuple(snapshot.normalized_footpoint), zone.polygon)
 
 
 def _point_from_tuple(value: tuple[float, float]) -> Point:

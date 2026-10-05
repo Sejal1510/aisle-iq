@@ -14,6 +14,7 @@ from app.schemas.live_analytics import (
     QueuedEntity,
     QueueMetricsResponse,
 )
+from app.services.event_filters import customer_events
 from app.services.occupancy_service import to_naive
 
 _TERMINAL_TYPES = (EventType.QUEUE_COMPLETED, EventType.QUEUE_ABANDONED)
@@ -99,6 +100,7 @@ class QueueService:
             .where(Event.store_id == store_id)
             .where(Event.event_type == EventType.BILLING_QUEUE_JOIN)
             .where(Event.queue_event_id.is_not(None))
+            .where(customer_events())
             .where(Event.timestamp <= resolved_as_of)
         ).all()
 
@@ -168,6 +170,7 @@ class QueueService:
             select(Event.event_type, Event.wait_seconds)
             .where(Event.store_id == store_id)
             .where(Event.event_type.in_(_TERMINAL_TYPES))
+            .where(customer_events())
             .where(Event.timestamp >= start)
             .where(Event.timestamp < end)
         ).all()

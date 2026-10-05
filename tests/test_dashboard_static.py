@@ -37,10 +37,13 @@ def test_dashboard_contains_required_views() -> None:
     assert 'id="insights-list"' in html
     assert 'id="common-paths"' in html
     assert 'id="heatmap-stage"' in html
-    assert "Store Heatmap" in html
-    assert "Total Visitors" in script
-    assert "Staff Filtered" in script
-    assert "Avg Group Size" in script
+    # The hotspot heatmap is camera-frame data, labelled as such (not drawn
+    # on the floor plan); the overview leads with entrance-based visitor
+    # counts and states what each tracked number means.
+    assert "Camera-View Heatmap" in html
+    assert "Store Entries" in script
+    assert "People Tracked" in script
+    assert "Staff Identified" in script
     assert "Store Comparison" in html
     assert "Live Analytics" in html
 
@@ -84,7 +87,7 @@ def test_dashboard_renders_heatmap_overlay_from_api_contract() -> None:
     styles = (DASHBOARD_DIR / "styles.css").read_text(encoding="utf-8")
 
     assert "function renderHeatmap(heatmap)" in script
-    assert "heatmap.layout_image_url" in script
+    assert "heatmap-frame" in script  # neutral camera-frame canvas, not the floor plan
     assert "heatmap.points" in script
     assert "--x:" in script
     assert "--y:" in script

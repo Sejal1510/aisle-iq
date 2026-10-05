@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Base
-from app.services.insights_service import InsightsService
+from app.services.insights_service import MIN_QUEUE_VISITS_FOR_ACTION, InsightsService
 from tests.test_analytics_service import seed_analytics_data
 
 
@@ -37,9 +37,23 @@ def test_insights_service_generates_deterministic_recommendations(db_session: Se
     assert "High Dwell Zone: makeup" in titles
 
     queue_insight = next(insight for insight in response.insights if insight.title == "Queue Abandonment Risk")
-    assert queue_insight.severity == "HIGH"
+    # The seeded store has only 2 resolved queue visits: the finding is kept,
+    # but reported as LOW with its sample size rather than escalated to HIGH.
+    assert queue_insight.severity == "LOW"
     assert "50%" in queue_insight.explanation
+    assert "only 2" in queue_insight.explanation
     assert "billing counter" in queue_insight.recommendation
+
+
+def test_queue_insights_escalate_once_the_sample_is_large_enough(db_session: Session) -> None:
+    service = InsightsService(db_session)
+    metrics = service.analytics.get_store_metrics("ST1008")
+
+    small = service._queue_insights(metrics.model_copy(update={"queue_visits": MIN_QUEUE_VISITS_FOR_ACTION - 1}))
+    large = service._queue_insights(metrics.model_copy(update={"queue_visits": MIN_QUEUE_VISITS_FOR_ACTION}))
+
+    assert {insight.severity for insight in small} == {"LOW"}
+    assert next(i for i in large if i.title == "Queue Abandonment Risk").severity == "HIGH"
 
 
 def test_insights_are_sorted_by_severity(db_session: Session) -> None:

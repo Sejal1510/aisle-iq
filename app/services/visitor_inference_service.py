@@ -119,7 +119,15 @@ class VisitorInferenceService:
             score, reasons = self._staff_score(entity_profiles)
             if entity.is_staff:
                 score = max(score, 1.0)
-                reasons.insert(0, "source marked as staff")
+                # Keep an already-recorded explicit reason (e.g. the video
+                # finalizer's "stationed at billing counter") instead of
+                # replacing it with the generic source flag.
+                prior_reasons = [
+                    reason
+                    for reason in (entity.staff_inference_reason or "").split(", ")
+                    if reason and reason != "customer behavior"
+                ]
+                reasons[:0] = prior_reasons or ["source marked as staff"]
 
             entity.staff_confidence_score = round(score, 4)
             entity.staff_inference_reason = ", ".join(dict.fromkeys(reasons)) or "customer behavior"

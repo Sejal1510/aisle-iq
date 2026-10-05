@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from pydantic import BaseModel, Field
+
+from app.schemas.common import UtcDatetime
 
 
 class ZoneDwellMetric(BaseModel):
@@ -27,6 +27,16 @@ class StoreMetricsResponse(BaseModel):
     attributed_revenue: float
     attributed_transactions: int
     zone_dwell_metrics: list[ZoneDwellMetric] = Field(default_factory=list)
+    # Customer ENTRY events (entrance-line crossings, staff excluded) -- the
+    # store-level visitor count. total_visitors above counts camera-scoped
+    # visit sessions, so one person seen by three cameras is three sessions.
+    footfall: int = 0
+    # Resolved customer queue visits (completed + abandoned) behind
+    # queue_abandonment_rate / average_queue_wait_seconds -- the sample size.
+    queue_visits: int = 0
+    # Whether any POS transaction exists for the store. Without POS data,
+    # conversion and revenue are unknown, not zero.
+    has_pos_data: bool = False
 
 
 class FunnelStep(BaseModel):
@@ -43,6 +53,9 @@ class StoreFunnelResponse(BaseModel):
     queue_complete: int
     purchase: int
     steps: list[FunnelStep]
+    # What the first step counts: "store_entries" (customer ENTRY events,
+    # when the store has an entrance camera) or "tracked_sessions".
+    visitor_basis: str = "tracked_sessions"
 
 
 class HeatmapPoint(BaseModel):
@@ -86,10 +99,10 @@ class StoreAnomaly(BaseModel):
     comparison_value: float | None = None
     absolute_change: float | None = None
     percent_change: float | None = None
-    current_period_start: datetime | None = None
-    current_period_end: datetime | None = None
-    previous_period_start: datetime | None = None
-    previous_period_end: datetime | None = None
+    current_period_start: UtcDatetime | None = None
+    current_period_end: UtcDatetime | None = None
+    previous_period_start: UtcDatetime | None = None
+    previous_period_end: UtcDatetime | None = None
     related_signals: list[str] = Field(default_factory=list)
 
 

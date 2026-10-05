@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
+from pipeline.video.annotation import AnnotatedVideoRenderer
 from pipeline.video.config import VideoProcessingConfig
-from pipeline.video.events import VideoEventGenerator
-from pipeline.video.tracking import UltralyticsByteTracker
+from pipeline.video.events import VideoEventGenerator, footpoint_in_zone
+from pipeline.video.tracking import UltralyticsByteTracker, read_video_metadata
 
 
 def process_camera(
@@ -28,6 +29,36 @@ def process_camera(
     entirely up to it.
     """
     generator = VideoEventGenerator(config)
-    for snapshot in tracker.track_video(config, max_frames=max_frames):
-        yield from generator.process_snapshot(snapshot)
+    renderer = _renderer_for(config)
+    staff_areas = [zone for zone in config.zones if zone.is_staff_area]
+    try:
+        track_kwargs = {"frame_callback": renderer.on_frame} if renderer is not None else {}
+        for snapshot in tracker.track_video(config, max_frames=max_frames, **track_kwargs):
+            if config.annotation is not None and any(footpoint_in_zone(snapshot, zone) for zone in staff_areas):
+                config.annotation.stats.record_staff_area_sighting(snapshot)
+            yield from generator.process_snapshot(snapshot)
+    finally:
+        if renderer is not None:
+            renderer.close()
     yield from generator.finalize()
+
+
+def _renderer_for(config: VideoProcessingConfig) -> AnnotatedVideoRenderer | None:
+    """An annotated-video renderer when the caller asked for one (the P9
+    worker does; the offline JSONL CLI doesn't). Inference stays at the
+    sampling rate; the renderer only re-decodes the original for smooth
+    playback."""
+    if config.annotation is None:
+        return None
+    stats = config.annotation.stats
+    stats.sample_fps = config.sample_fps
+    source_fps = None
+    try:
+        metadata = read_video_metadata(config.video_path)
+        stats.video_duration_seconds = metadata.duration_seconds
+        source_fps = metadata.fps
+    except Exception:  # noqa: BLE001 - metadata is informational only
+        stats.video_duration_seconds = None
+    return AnnotatedVideoRenderer(
+        config.annotation, fps=config.sample_fps, source_path=config.video_path, source_fps=source_fps
+    )
